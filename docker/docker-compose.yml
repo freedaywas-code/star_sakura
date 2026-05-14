@@ -1,0 +1,17 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ../backend/.env.example
+    environment:
+      SQLITE_NAME: /app/backend/data/db.sqlite3
+    volumes:
+      - ../backend/media:/app/backend/media
+      - backend_data:/app/backend/data
+    ports:
+      - "8000:8000"
+
+volumes:
+  backend_data:
