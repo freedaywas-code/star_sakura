@@ -6,6 +6,7 @@ import sys
 import time
 import webbrowser
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from urllib import error, request
 from pathlib import Path
 from threading import Thread
 
@@ -54,8 +55,70 @@ def prepare_database(env):
     run_command([venv_python(), "manage.py", "ensure_default_admin"], cwd=BACKEND, env=env)
 
 
-def serve_frontend(host, port):
+def serve_frontend(host, port, backend_port):
     class FrontendHandler(SimpleHTTPRequestHandler):
+        def proxy_backend(self):
+            target = f"http://127.0.0.1:{backend_port}{self.path}"
+            body = None
+            if self.command in {"POST", "PUT", "PATCH"}:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = self.rfile.read(length) if length else None
+            headers = {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}
+            }
+            backend_request = request.Request(target, data=body, headers=headers, method=self.command)
+            try:
+                with request.urlopen(backend_request, timeout=30) as response:
+                    payload = response.read()
+                    self.send_response(response.status)
+                    for key, value in response.headers.items():
+                        if key.lower() not in {"transfer-encoding", "connection", "content-encoding"}:
+                            self.send_header(key, value)
+                    self.end_headers()
+                    self.wfile.write(payload)
+            except error.HTTPError as exc:
+                payload = exc.read()
+                self.send_response(exc.code)
+                for key, value in exc.headers.items():
+                    if key.lower() not in {"transfer-encoding", "connection", "content-encoding"}:
+                        self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as exc:
+                payload = f'{{"code":502,"message":"Backend proxy failed: {exc}","data":null}}'.encode("utf-8")
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        def do_GET(self):
+            if self.path.startswith(("/api/", "/media/")):
+                return self.proxy_backend()
+            return super().do_GET()
+
+        def do_POST(self):
+            if self.path.startswith(("/api/", "/media/")):
+                return self.proxy_backend()
+            return self.send_error(405)
+
+        def do_PUT(self):
+            if self.path.startswith(("/api/", "/media/")):
+                return self.proxy_backend()
+            return self.send_error(405)
+
+        def do_PATCH(self):
+            if self.path.startswith(("/api/", "/media/")):
+                return self.proxy_backend()
+            return self.send_error(405)
+
+        def do_DELETE(self):
+            if self.path.startswith(("/api/", "/media/")):
+                return self.proxy_backend()
+            return self.send_error(405)
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(FRONTEND), **kwargs)
 
@@ -95,7 +158,7 @@ def main():
     prepare_database(env)
 
     if not args.no_frontend:
-        thread = Thread(target=serve_frontend, args=(args.host, args.frontend_port), daemon=True)
+        thread = Thread(target=serve_frontend, args=(args.host, args.frontend_port, args.backend_port), daemon=True)
         thread.start()
         if not args.no_browser:
             open_browser(f"http://{args.host}:{args.frontend_port}")

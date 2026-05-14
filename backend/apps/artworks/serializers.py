@@ -37,9 +37,7 @@ class ArtworkSerializer(serializers.ModelSerializer):
     def get_image_url(self, obj):
         if not obj.image:
             return ""
-        request = self.context.get("request")
-        url = obj.image.url
-        return request.build_absolute_uri(url) if request else url
+        return obj.image.url
 
     def get_reviews_count(self, obj):
         return obj.reviews.count()
