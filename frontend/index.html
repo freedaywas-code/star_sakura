@@ -3006,10 +3006,12 @@
       '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '\"': '&quot;'
     }[char]));
 
+    const encodeHeaderValue = (value = '') => encodeURIComponent(String(value || ''));
+
     function apiHeaders(extra = {}) {
       return {
         'Content-Type': 'application/json',
-        'X-Star-Username': currentUser?.username || 'admin',
+        'X-Star-Username': encodeHeaderValue(currentUser?.username || 'admin'),
         ...extra
       };
     }
@@ -3051,6 +3053,7 @@
       const path = card.dataset.saved === 'true' ? `/artworks/${card.dataset.id}/` : '/artworks/';
       const saved = await apiRequest(path, {
         method,
+        headers: { 'X-Star-Username': encodeHeaderValue(card.dataset.owner || currentUser?.username || 'admin') },
         body: JSON.stringify(payload)
       });
       card.dataset.id = String(saved.id);
@@ -3068,6 +3071,50 @@
       }
       updateCommentButtons();
       return saved;
+    }
+
+    function artworkMatchesCard(item, card) {
+      if (!item || !card) return false;
+      const data = getCardData(card);
+      return !!data
+        && String(item.owner_username || '') === String(data.owner || '')
+        && String(item.title || '').trim() === String(data.name || '').trim()
+        && String(item.category || '').trim() === String(data.tag || '').trim();
+    }
+
+    async function ensureArtworkRecords() {
+      let items = [];
+      try {
+        items = apiList(await apiRequest('/artworks/?page_size=200&ordering=created_at'));
+      } catch (error) {
+        console.warn('Artwork sync skipped:', error);
+        return;
+      }
+
+      const cards = Array.from(document.querySelectorAll('.character-card'));
+      let changed = false;
+      for (const card of cards) {
+        if (card.dataset.saved === 'true') continue;
+        const matched = items.find(item => artworkMatchesCard(item, card));
+        if (matched) {
+          card.dataset.id = String(matched.id);
+          card.dataset.saved = 'true';
+          card.dataset.reviewsCount = String(matched.reviews_count || 0);
+          changed = true;
+          continue;
+        }
+        try {
+          const saved = await persistArtwork(card);
+          items.push(saved);
+          changed = true;
+        } catch (error) {
+          console.warn('Artwork sync failed for card:', card.dataset.id, error);
+        }
+      }
+      if (changed) {
+        saveGallery(false);
+        updateCommentButtons();
+      }
     }
 
     async function deleteArtworkFromApi(card) {
@@ -3348,6 +3395,8 @@
       document.querySelectorAll('.character-card').forEach(card => {
         if (!card.dataset.owner) card.dataset.owner = ORIGINAL_CARD_IDS.has(card.dataset.id) ? 'admin' : (currentUser?.username || 'admin');
         if (!card.dataset.original) card.dataset.original = ORIGINAL_CARD_IDS.has(card.dataset.id) ? 'true' : 'false';
+        if (!card.dataset.saved) card.dataset.saved = 'false';
+        if (!card.dataset.reviewsCount) card.dataset.reviewsCount = '0';
       });
     }
 
@@ -3442,11 +3491,23 @@
       try {
         items = await fetchArtworkReviews(cardId);
       } catch (error) {
-        list.innerHTML = '<div class="empty-state">评价加载失败，请确认后端服务已启动。</div>';
-        return;
+        const card = getGalleryCard(cardId);
+        if (card && card.dataset.saved !== 'true') {
+          await ensureArtworkRecords();
+          try {
+            items = await fetchArtworkReviews(getGalleryCard(cardId)?.dataset.id || cardId);
+          } catch (retryError) {
+            list.innerHTML = '<div class="empty-state">评价加载失败，请确认后端服务已启动。</div>';
+            return;
+          }
+        } else {
+          list.innerHTML = '<div class="empty-state">评价加载失败，请确认后端服务已启动。</div>';
+          return;
+        }
       }
       const card = getGalleryCard(cardId);
       if (card) {
+        document.getElementById('commentCardId').value = card.dataset.id;
         card.dataset.reviewsCount = String(items.length);
         updateCommentButtons();
       }
@@ -3970,7 +4031,9 @@
           tag: card.querySelector('.character-tag').textContent,
           imageSrc: img ? img.src : null,
           owner: card.dataset.owner || 'admin',
-          original: card.dataset.original === 'true'
+          original: card.dataset.original === 'true',
+          saved: card.dataset.saved === 'true',
+          reviewsCount: Number(card.dataset.reviewsCount || 0)
         };
       });
     }
@@ -4003,6 +4066,8 @@
           card.dataset.id = String(data.id);
           card.dataset.owner = data.owner || (ORIGINAL_CARD_IDS.has(String(data.id)) ? 'admin' : (currentUser?.username || 'admin'));
           card.dataset.original = String(data.original ?? ORIGINAL_CARD_IDS.has(String(data.id)));
+          card.dataset.saved = String(data.saved === true);
+          card.dataset.reviewsCount = String(data.reviewsCount || 0);
           const imageHtml = data.imageSrc ? `<img src="${data.imageSrc}" alt="${escapeHTML(data.name)}">` : '';
           card.innerHTML = `
             <div class="card-actions">
@@ -4589,7 +4654,7 @@
       for (const item of legacy) {
         await apiRequest('/custom/', {
           method: 'POST',
-          headers: { 'X-Star-Username': item.requester || 'admin' },
+          headers: { 'X-Star-Username': encodeHeaderValue(item.requester || 'admin') },
           body: JSON.stringify(commissionToApiPayload(item))
         });
       }
@@ -5075,7 +5140,7 @@
     }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
     document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
 
-    window.addEventListener('DOMContentLoaded', () => {
+    window.addEventListener('DOMContentLoaded', async () => {
       getUsers();
       initCommissionPage();
       prepareCardOwnership();
@@ -5084,6 +5149,7 @@
       renderCommissionBoard();
       refreshCommissions();
       prepareCardOwnership();
+      await ensureArtworkRecords();
       normalizeCardActions();
       normalizeCommentButtons();
       applyCardPermissions();

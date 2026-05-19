@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from urllib.parse import unquote
 
 from common.response import ok
 from common.response import ApiResponseMixin
@@ -31,6 +32,7 @@ class ReviewViewSet(ApiResponseMixin, viewsets.ModelViewSet):
             or self.request.query_params.get("owner_username")
             or "admin"
         )
+        username = unquote(str(username))
         user, _ = User.objects.get_or_create(username=username, defaults={"email": f"{username}@local.star"})
         return user
 

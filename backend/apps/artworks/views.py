@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import permissions, viewsets
 from rest_framework.exceptions import PermissionDenied
+from urllib.parse import unquote
 
 from common.response import ApiResponseMixin
 
@@ -28,6 +29,7 @@ class ArtworkViewSet(ApiResponseMixin, viewsets.ModelViewSet):
             or self.request.query_params.get("owner_username")
             or "admin"
         )
+        username = unquote(str(username))
         user, _ = User.objects.get_or_create(username=username, defaults={"email": f"{username}@local.star"})
         return user
 
