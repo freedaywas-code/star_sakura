@@ -40,6 +40,8 @@ class ArtworkSerializer(serializers.ModelSerializer):
         return obj.image.url
 
     def get_reviews_count(self, obj):
+        if hasattr(obj, "reviews_total"):
+            return obj.reviews_total
         return obj.reviews.count()
 
     def _decode_image(self, image_data):

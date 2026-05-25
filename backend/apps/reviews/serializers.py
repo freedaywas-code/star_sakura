@@ -3,7 +3,6 @@ import uuid
 
 from django.core.files.base import ContentFile
 from rest_framework import serializers
-from urllib.parse import unquote
 
 from .models import Review
 
@@ -60,12 +59,7 @@ class ReviewSerializer(serializers.ModelSerializer):
 
     def get_liked(self, obj):
         request = self.context.get("request")
-        username = ""
-        if request:
-            username = request.headers.get("X-Star-Username") or request.query_params.get("owner_username") or ""
-            username = unquote(str(username))
-            if request.user.is_authenticated:
-                username = request.user.username
+        username = request.user.username if request and request.user.is_authenticated else ""
         return username in (obj.liked_by or [])
 
     def _decode_image(self, image_data):

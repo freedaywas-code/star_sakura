@@ -53,6 +53,9 @@ def prepare_database(env):
     run_command([venv_python(), "manage.py", "makemigrations"], cwd=BACKEND, env=env)
     run_command([venv_python(), "manage.py", "migrate"], cwd=BACKEND, env=env)
     run_command([venv_python(), "manage.py", "ensure_default_admin"], cwd=BACKEND, env=env)
+    run_command([venv_python(), "manage.py", "seed_initial_artworks"], cwd=BACKEND, env=env)
+    run_command([venv_python(), "manage.py", "seed_initial_inspirations"], cwd=BACKEND, env=env)
+    run_command([venv_python(), "manage.py", "seed_commission_options"], cwd=BACKEND, env=env)
 
 
 def serve_frontend(host, port, backend_port):

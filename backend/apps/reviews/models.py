@@ -20,6 +20,12 @@ class Review(models.Model):
         verbose_name = "评价"
         verbose_name_plural = "评价"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["artwork", "-created_at"]),
+            models.Index(fields=["reviewer", "-created_at"]),
+            models.Index(fields=["target_user", "-created_at"]),
+            models.Index(fields=["-created_at"]),
+        ]
 
     def __str__(self):
         return f"{self.rating} 星 - {self.artwork}"

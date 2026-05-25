@@ -20,6 +20,7 @@ def api_home(request):
                     "orders": "/api/orders/",
                     "custom": "/api/custom/",
                     "reviews": "/api/reviews/",
+                    "inspirations": "/api/inspirations/",
                 },
             },
         },
@@ -46,6 +47,7 @@ urlpatterns = [
     path("api/orders/", include("apps.orders.urls")),
     path("api/custom/", include("apps.custom.urls")),
     path("api/reviews/", include("apps.reviews.urls")),
+    path("api/inspirations/", include("apps.inspirations.urls")),
 ]
 
 if settings.DEBUG:

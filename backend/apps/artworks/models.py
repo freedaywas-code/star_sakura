@@ -18,6 +18,12 @@ class Artwork(models.Model):
         verbose_name = "画作"
         verbose_name_plural = "画作"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["owner", "-created_at"]),
+            models.Index(fields=["category", "-created_at"]),
+            models.Index(fields=["is_available", "-created_at"]),
+            models.Index(fields=["-created_at"]),
+        ]
 
     def __str__(self):
         return self.title

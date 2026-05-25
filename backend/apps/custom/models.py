@@ -44,6 +44,33 @@ class CustomRequest(models.Model):
         verbose_name = "线上定制"
         verbose_name_plural = "线上定制"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "-created_at"]),
+            models.Index(fields=["requester", "-created_at"]),
+            models.Index(fields=["artist", "-created_at"]),
+            models.Index(fields=["-created_at"]),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class CommissionOption(models.Model):
+    code = models.SlugField("选项代码", max_length=40, unique=True)
+    title = models.CharField("委托类型", max_length=80)
+    price_label = models.CharField("价格说明", max_length=80, blank=True)
+    sort_order = models.PositiveSmallIntegerField("排序", default=0)
+    is_active = models.BooleanField("启用", default=True)
+    created_at = models.DateTimeField("创建时间", auto_now_add=True)
+    updated_at = models.DateTimeField("更新时间", auto_now=True)
+
+    class Meta:
+        verbose_name = "委托类型"
+        verbose_name_plural = "委托类型"
+        ordering = ["sort_order", "id"]
+        indexes = [
+            models.Index(fields=["is_active", "sort_order"]),
+        ]
 
     def __str__(self):
         return self.title

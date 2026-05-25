@@ -1,4 +1,4 @@
-# 星野樱的动漫工作室
+# 星漫
 
 一个按前后端分离整理的动漫画廊/约稿平台项目。前端保留为静态 HTML，后端使用 Django + Django REST framework。
 
@@ -193,4 +193,3 @@ star_sakura/
   "data": {}
 }
 ```
-# star_sakura

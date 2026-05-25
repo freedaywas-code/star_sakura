@@ -1,5 +1,19 @@
+import os
+
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
+
+
+DEFAULT_ADMIN_PROFILE = {
+    "displayName": "星野樱",
+    "avatar": "",
+    "intro": "用画笔创造无限可能的世界",
+    "philosophy": "用色彩传递情感，用线条勾勒梦想",
+    "skills": ["Clip Studio Paint", "Photoshop", "Procreate", "SAI", "Wacom Intuos"],
+    "gender": "",
+    "birthday": "",
+    "signature": "用画笔创造无限可能的世界",
+}
 
 
 class Command(BaseCommand):
@@ -20,8 +34,17 @@ class Command(BaseCommand):
         admin.is_admin = True
         admin.is_staff = True
         admin.is_superuser = True
-        admin.set_password("admin123456")
+        admin.profile = {**DEFAULT_ADMIN_PROFILE, **(admin.profile or {})}
+        admin.bio = admin.bio or DEFAULT_ADMIN_PROFILE["intro"]
+        password = os.getenv("DEFAULT_ADMIN_PASSWORD")
+        if created:
+            admin.set_password(password or User.objects.make_random_password(length=16))
+        elif password:
+            admin.set_password(password)
         admin.save()
 
         action = "created" if created else "updated"
-        self.stdout.write(self.style.SUCCESS(f"Default admin {action}: admin / admin123456"))
+        message = f"Default admin {action}: admin"
+        if created and not password:
+            message += " (set DEFAULT_ADMIN_PASSWORD and rerun this command to choose a password)"
+        self.stdout.write(self.style.SUCCESS(message))

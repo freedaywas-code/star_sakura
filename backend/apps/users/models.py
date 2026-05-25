@@ -7,6 +7,8 @@ class User(AbstractUser):
     avatar = models.ImageField("头像", upload_to="avatars/", blank=True, null=True)
     bio = models.TextField("简介", blank=True)
 
+    profile = models.JSONField(default=dict, blank=True)
+
     class Meta:
         verbose_name = "用户"
         verbose_name_plural = "用户"

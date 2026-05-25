@@ -2,7 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 from rest_framework import serializers
 
-from .models import CustomRequest
+from .models import CommissionOption, CustomRequest
 
 
 class CustomRequestSerializer(serializers.ModelSerializer):
@@ -64,3 +64,9 @@ class CustomRequestSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         return super().update(instance, self._apply_budget(validated_data))
+
+
+class CommissionOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CommissionOption
+        fields = ["code", "title", "price_label", "sort_order"]

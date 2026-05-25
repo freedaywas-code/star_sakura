@@ -1,13 +1,16 @@
-from django.contrib.auth import get_user_model
+from django.conf import settings
+from django.contrib.auth import authenticate, get_user_model
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.generics import CreateAPIView, RetrieveUpdateAPIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from common.response import ApiResponseMixin, ok
 
 from .permissions import IsAdmin
-from .serializers import AdminUserSerializer, LoginSerializer, RegisterSerializer, UserSerializer
+from .serializers import AdminUserSerializer, ChangePasswordSerializer, RegisterSerializer, UserSerializer
 
 
 User = get_user_model()
@@ -18,9 +21,43 @@ class RegisterView(ApiResponseMixin, CreateAPIView):
     permission_classes = [permissions.AllowAny]
 
 
-class LoginView(ApiResponseMixin, TokenObtainPairView):
-    serializer_class = LoginSerializer
+class LoginView(ApiResponseMixin, APIView):
     permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        raw_username = request.data.get("username") or request.data.get("email") or ""
+        password = request.data.get("password") or ""
+        username = str(raw_username).strip()
+        user = (
+            User.objects.filter(username__iexact=username).first()
+            or User.objects.filter(email__iexact=username).first()
+        )
+        auth_user = authenticate(request, username=user.get_username(), password=password) if user else None
+
+        if not auth_user or not auth_user.is_active:
+            if settings.DEBUG:
+                print(
+                    "[login debug]",
+                    {
+                        "content_type": getattr(request, "content_type", ""),
+                        "keys": sorted(request.data.keys()),
+                        "username_repr": repr(raw_username),
+                        "normalized_username": username,
+                        "password_length": len(password),
+                        "user_found": bool(user),
+                        "user_is_active": getattr(user, "is_active", None),
+                        "password_matches": user.check_password(password) if user else False,
+                    },
+                )
+            raise AuthenticationFailed("用户名或密码不正确。")
+
+        refresh = RefreshToken.for_user(auth_user)
+        refresh["username"] = auth_user.username
+        refresh["is_admin"] = auth_user.is_admin
+        access = refresh.access_token
+        access["username"] = auth_user.username
+        access["is_admin"] = auth_user.is_admin
+        return ok({"refresh": str(refresh), "access": str(access)})
 
 
 class MeView(ApiResponseMixin, RetrieveUpdateAPIView):
@@ -29,6 +66,16 @@ class MeView(ApiResponseMixin, RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class ChangePasswordView(ApiResponseMixin, APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return ok(None, message="password updated", status=status.HTTP_200_OK)
 
 
 class UserViewSet(ApiResponseMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):

@@ -1,18 +1,12 @@
 from django.db.models import Q
-from django.contrib.auth import get_user_model
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from urllib.parse import unquote
 
-from common.response import ok
-from common.response import ApiResponseMixin
+from common.response import ApiResponseMixin, ok
 
 from .models import Review
 from .serializers import ReviewSerializer
-
-
-User = get_user_model()
 
 
 class ReviewViewSet(ApiResponseMixin, viewsets.ModelViewSet):
@@ -23,47 +17,30 @@ class ReviewViewSet(ApiResponseMixin, viewsets.ModelViewSet):
     ordering_fields = ["created_at", "rating"]
     ordering = ["-created_at"]
 
-    def _frontend_user(self):
-        if self.request.user.is_authenticated:
-            return self.request.user
-        username = (
-            self.request.headers.get("X-Star-Username")
-            or self.request.data.get("reviewer_username")
-            or self.request.query_params.get("owner_username")
-            or "admin"
-        )
-        username = unquote(str(username))
-        user, _ = User.objects.get_or_create(username=username, defaults={"email": f"{username}@local.star"})
-        return user
-
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [permissions.AllowAny()]
-        if self.action == "like":
-            return [permissions.AllowAny()]
+        if self.action in ["create", "update", "partial_update", "destroy", "like"]:
+            return [permissions.IsAuthenticated()]
         return [permissions.AllowAny()]
 
     def get_queryset(self):
         queryset = self.queryset
         if self.action in ["list", "retrieve"] or (self.request.user.is_authenticated and self.request.user.is_admin):
             return queryset
-        user = self._frontend_user()
-        return queryset.filter(Q(reviewer=user) | Q(target_user=user))
+        return queryset.filter(Q(reviewer=self.request.user) | Q(target_user=self.request.user))
 
     def perform_create(self, serializer):
         order = serializer.validated_data.get("order")
         artwork = serializer.validated_data["artwork"]
-        reviewer = self._frontend_user()
+        reviewer = self.request.user
         if order and order.buyer_id != reviewer.id:
-            raise ValidationError("只有买家可以评价该订单")
+            raise ValidationError("Only the buyer can review this order.")
         target_user = order.seller if order else artwork.owner
         serializer.save(reviewer=reviewer, target_user=target_user)
 
     def _ensure_reviewer_or_admin(self, review):
-        user = self._frontend_user()
-        if getattr(user, "is_admin", False) or review.reviewer_id == user.id or user.username == "admin":
+        if self.request.user.is_admin or review.reviewer_id == self.request.user.id:
             return
-        raise PermissionDenied("只能修改自己的评价")
+        raise PermissionDenied("Only the reviewer or admin can modify this review.")
 
     def perform_update(self, serializer):
         self._ensure_reviewer_or_admin(self.get_object())
@@ -76,12 +53,11 @@ class ReviewViewSet(ApiResponseMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def like(self, request, pk=None):
         review = self.get_object()
-        user = self._frontend_user()
         liked_by = list(review.liked_by or [])
-        if user.username in liked_by:
-            liked_by.remove(user.username)
+        if request.user.username in liked_by:
+            liked_by.remove(request.user.username)
         else:
-            liked_by.append(user.username)
+            liked_by.append(request.user.username)
         review.liked_by = liked_by
         review.like_count = len(liked_by)
         review.save(update_fields=["liked_by", "like_count"])
