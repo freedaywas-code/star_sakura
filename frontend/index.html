@@ -1686,6 +1686,58 @@
       background: #fff5f7;
     }
 
+    .comment-reply,
+    .comment-expand {
+      margin-top: 0.55rem;
+      margin-left: 0.45rem;
+      border: none;
+      background: transparent;
+      color: var(--modern-accent, #0969da);
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .comment-replies {
+      grid-column: 2;
+      display: grid;
+      gap: 0.7rem;
+      margin-top: 0.7rem;
+      padding-left: 0.9rem;
+      border-left: 2px solid #e5ebf2;
+    }
+
+    .comment-item.reply {
+      grid-template-columns: 34px 1fr;
+    }
+
+    .comment-item.reply .comment-avatar {
+      width: 34px;
+      height: 34px;
+      font-size: 0.85rem;
+    }
+
+    .reply-form {
+      grid-column: 2;
+      display: grid;
+      gap: 0.55rem;
+      margin-top: 0.7rem;
+    }
+
+    .reply-form textarea {
+      min-height: 68px;
+      resize: vertical;
+      border: 1px solid #dbe2ea;
+      border-radius: 12px;
+      padding: 0.72rem;
+      font-family: inherit;
+    }
+
+    .reply-form-actions {
+      display: flex;
+      gap: 0.6rem;
+      justify-content: flex-end;
+    }
+
     .comment-form {
       border-top: 1px solid #edf0f5;
       padding-top: 1rem;
@@ -1730,6 +1782,70 @@
       .artwork-detail-image {
         min-height: 300px;
         max-height: 44vh;
+      }
+    }
+
+    .inspiration-detail-panel {
+      width: min(980px, 96vw);
+      max-height: 90vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 0.75fr);
+      background: #fff;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.32);
+    }
+
+    .inspiration-detail-main {
+      min-height: 520px;
+      padding: clamp(1.4rem, 3vw, 2.4rem);
+      background:
+        linear-gradient(180deg, #ffffff, #fbfdff),
+        var(--gradient-brand-soft, linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(240, 93, 106, 0.08)));
+      overflow: auto;
+    }
+
+    .inspiration-detail-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin: 0.8rem 0 1.5rem;
+      color: var(--modern-muted, #57606a);
+      font-size: 0.9rem;
+    }
+
+    .inspiration-detail-content {
+      color: var(--modern-text, #24292f);
+      line-height: 1.9;
+      white-space: pre-wrap;
+    }
+
+    .inspiration-detail-side {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      max-height: 90vh;
+      padding: 1.4rem;
+      border-left: 1px solid #edf0f5;
+    }
+
+    .blog-item {
+      cursor: pointer;
+    }
+
+    @media (max-width: 860px) {
+      .inspiration-detail-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .inspiration-detail-main {
+        min-height: 260px;
+        max-height: 42vh;
+      }
+
+      .inspiration-detail-side {
+        border-left: 0;
+        border-top: 1px solid #edf0f5;
       }
     }
 
@@ -2356,24 +2472,30 @@
       }
     }
 
-    /* ====== Modern minimal UI refresh ====== */
+    /* ====== Mature product UI refresh ====== */
     :root {
-      --modern-bg: #f6f8fa;
+      --modern-bg: #f4f7fb;
       --modern-surface: #ffffff;
-      --modern-surface-muted: #f6f8fa;
-      --modern-border: #d0d7de;
-      --modern-border-soft: #eaeef2;
-      --modern-text: #24292f;
-      --modern-muted: #57606a;
-      --modern-subtle: #6e7781;
-      --modern-accent: #0969da;
-      --modern-accent-hover: #0550ae;
-      --modern-success: #1a7f37;
+      --modern-surface-muted: #f7f9fc;
+      --modern-border: #cfd8e3;
+      --modern-border-soft: #e5ebf2;
+      --modern-text: #172033;
+      --modern-muted: #5e6b7d;
+      --modern-subtle: #7b8797;
+      --modern-accent: #2563eb;
+      --modern-accent-hover: #1d4ed8;
+      --modern-success: #16834a;
       --modern-danger: #cf222e;
-      --modern-shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
-      --modern-radius: 8px;
-      --modern-radius-sm: 6px;
-      --gradient-main: linear-gradient(135deg, #0969da 0%, #8250df 100%);
+      --brand-violet: #7c3aed;
+      --brand-coral: #f05d6a;
+      --brand-gold: #f5b942;
+      --brand-mint: #12b981;
+      --modern-shadow: 0 16px 42px rgba(23, 32, 51, 0.12);
+      --modern-shadow-soft: 0 8px 24px rgba(23, 32, 51, 0.08);
+      --modern-radius: 14px;
+      --modern-radius-sm: 10px;
+      --gradient-main: linear-gradient(135deg, #2563eb 0%, #7c3aed 48%, #f05d6a 100%);
+      --gradient-brand-soft: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(124, 58, 237, 0.1) 52%, rgba(240, 93, 106, 0.1));
       --text-dark: var(--modern-text);
       --bg-cream: var(--modern-bg);
       --shadow-soft: 0 1px 2px rgba(31, 35, 40, 0.06);
@@ -2382,7 +2504,9 @@
     }
 
     body {
-      background: var(--modern-bg);
+      background:
+        linear-gradient(180deg, #f9fbff 0%, #f4f7fb 42%, #ffffff 100%),
+        linear-gradient(120deg, rgba(37, 99, 235, 0.08), transparent 38%, rgba(240, 93, 106, 0.08));
       color: var(--modern-text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
     }
@@ -2390,24 +2514,26 @@
     nav {
       height: 64px;
       padding: 0 5%;
-      background: rgba(255, 255, 255, 0.92);
+      background: rgba(255, 255, 255, 0.78);
       border-bottom: 1px solid var(--modern-border-soft);
       box-shadow: none;
+      backdrop-filter: blur(22px) saturate(1.25);
     }
 
     nav.scrolled {
       padding: 0 5%;
-      background: rgba(255, 255, 255, 0.98);
-      box-shadow: 0 1px 0 var(--modern-border-soft);
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: 0 8px 30px rgba(23, 32, 51, 0.08);
     }
 
     .logo {
-      color: var(--modern-text);
-      background: none;
-      -webkit-text-fill-color: initial;
+      background: var(--gradient-main);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
       letter-spacing: 0;
       font-size: 1.75rem;
-      font-weight: 800;
+      font-weight: 900;
     }
 
     .nav-links {
@@ -2430,24 +2556,24 @@
     .nav-links a:hover,
     nav .nav-links a.active {
       color: var(--modern-text);
-      background: var(--modern-surface-muted);
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.09), rgba(124, 58, 237, 0.08));
     }
 
     .nav-publish,
     .submit-btn,
     .cta-button {
       border-radius: var(--modern-radius-sm);
-      background: var(--modern-accent);
-      box-shadow: none;
-      font-weight: 600;
+      background: var(--gradient-main);
+      box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22);
+      font-weight: 800;
     }
 
     .nav-publish:hover,
     .submit-btn:hover,
     .cta-button:hover {
-      background: var(--modern-accent-hover);
-      transform: none;
-      box-shadow: none;
+      background: linear-gradient(135deg, #1d4ed8 0%, #6d28d9 48%, #e5485b 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 16px 34px rgba(124, 58, 237, 0.24);
     }
 
     .nav-user {
@@ -2465,8 +2591,8 @@
 
     .nav-avatar,
     .profile-avatar {
-      background: #57606a;
-      box-shadow: none;
+      background: var(--gradient-main);
+      box-shadow: 0 8px 20px rgba(37, 99, 235, 0.2);
       border-color: var(--modern-surface);
     }
 
@@ -2495,11 +2621,43 @@
       padding-top: 5.5rem;
       padding-left: clamp(1rem, 4vw, 3rem);
       padding-right: clamp(1rem, 4vw, 3rem);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(244, 247, 251, 0.88)),
+        linear-gradient(115deg, rgba(37, 99, 235, 0.04), transparent 34%, rgba(240, 93, 106, 0.04));
     }
 
     .home {
-      background: var(--modern-bg);
+      isolation: isolate;
+      background:
+        linear-gradient(125deg, rgba(8, 13, 30, 0.94) 0%, rgba(24, 36, 68, 0.92) 38%, rgba(66, 45, 115, 0.9) 68%, rgba(154, 54, 78, 0.88) 100%),
+        linear-gradient(90deg, rgba(245, 185, 66, 0.2), transparent 36%, rgba(18, 185, 129, 0.18));
       min-height: calc(100vh - 64px);
+    }
+
+    .home::before {
+      top: 64px;
+      bottom: 0;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+      background-size: 72px 72px;
+      opacity: 0.34;
+      animation: none;
+      z-index: 0;
+    }
+
+    .home::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 34%;
+      background:
+        linear-gradient(180deg, transparent, rgba(244, 247, 251, 0.96)),
+        linear-gradient(92deg, rgba(37, 99, 235, 0.2), rgba(245, 185, 66, 0.14), rgba(18, 185, 129, 0.16));
+      z-index: 0;
+      pointer-events: none;
     }
 
     .parallax-bg,
@@ -2508,38 +2666,89 @@
     }
 
     .home-content {
-      width: min(900px, calc(100% - 2rem));
+      width: min(1080px, calc(100% - 2rem));
       max-width: none;
-      padding: 4rem 1.5rem 2rem;
+      padding: 5rem 1.5rem 2rem;
       text-align: center;
     }
 
     .home-content h1 {
-      color: var(--modern-text);
+      max-width: 780px;
+      margin-left: auto;
+      margin-right: auto;
+      color: #ffffff;
       text-shadow: none;
       letter-spacing: 0;
-      line-height: 1.12;
+      line-height: 1.08;
+      font-size: clamp(3rem, 7vw, 6rem);
     }
 
-    .home-content p,
+    .home-content h1 span {
+      background: linear-gradient(90deg, #f5b942, #ffffff 42%, #7dd3fc 72%, #fda4af);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .home-content p {
+      max-width: 660px;
+      margin-left: auto;
+      margin-right: auto;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: clamp(1.05rem, 1.8vw, 1.25rem);
+      line-height: 1.9;
+    }
+
+    .cta-button {
+      margin-top: 1.6rem;
+      padding: 0.95rem 1.35rem;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      color: #ffffff;
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(124, 58, 237, 0.94) 52%, rgba(240, 93, 106, 0.94));
+    }
+
+    .home-content::after {
+      content: 'Original IP · Commission · Inspiration';
+      display: flex;
+      width: fit-content;
+      margin: 1rem auto 0;
+      padding: 0.55rem 0.75rem;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      color: rgba(255, 255, 255, 0.76);
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 0.82rem;
+      font-weight: 700;
+      backdrop-filter: blur(16px);
+    }
+
     .section-title p {
       color: var(--modern-muted);
     }
 
     .section-title {
       margin-bottom: 2rem;
+      text-align: center;
+      width: min(1180px, 100%);
+      margin-left: auto;
+      margin-right: auto;
     }
 
     .section-title h2 {
       color: var(--modern-text);
       letter-spacing: 0;
+      font-size: clamp(2rem, 3.2vw, 3rem);
     }
 
     .section-title::after {
-      background: var(--modern-border);
-      height: 1px;
-      width: 100%;
-      max-width: 720px;
+      margin-left: auto;
+      margin-right: auto;
+      background: var(--gradient-main);
+      height: 4px;
+      width: 92px;
+      max-width: none;
+      border-radius: 999px;
     }
 
     .gallery-grid,
@@ -2571,26 +2780,63 @@
       border: 1px solid var(--modern-border-soft);
       border-radius: var(--modern-radius);
       background: var(--modern-surface);
-      box-shadow: 0 1px 2px rgba(31, 35, 40, 0.04);
+      box-shadow: var(--modern-shadow-soft);
+      overflow: hidden;
+    }
+
+    .character-card,
+    .blog-item,
+    .commission-card,
+    .profile-panel,
+    .me-panel,
+    .publish-form-panel,
+    .publish-preview,
+    .contact-form,
+    .commission-status {
+      position: relative;
+    }
+
+    .character-card::after,
+    .blog-item::after,
+    .commission-card::after,
+    .profile-panel::after,
+    .me-panel::after,
+    .publish-form-panel::after,
+    .publish-preview::after,
+    .contact-form::after,
+    .commission-status::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 4px;
+      background: var(--gradient-main);
+      opacity: 0.9;
+      pointer-events: none;
     }
 
     .character-card:hover,
     .blog-item:hover,
     .mini-item:hover {
-      transform: translateY(-1px);
+      transform: translateY(-3px);
       box-shadow: var(--modern-shadow);
     }
 
     .character-image {
       border-radius: var(--modern-radius) var(--modern-radius) 0 0;
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(124, 58, 237, 0.08) 48%, rgba(240, 93, 106, 0.1)),
+        linear-gradient(45deg, rgba(255, 255, 255, 0.45) 0 1px, transparent 1px 16px);
     }
 
     .character-tag,
     .blog-tag {
-      color: var(--modern-accent);
-      background: #ddf4ff;
+      color: #1d4ed8;
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(18, 185, 129, 0.12));
+      border: 1px solid rgba(37, 99, 235, 0.12);
       border-radius: 999px;
-      font-weight: 600;
+      font-weight: 800;
     }
 
     input,
@@ -2599,7 +2845,7 @@
     .comment-form textarea {
       border: 1px solid var(--modern-border);
       border-radius: var(--modern-radius-sm);
-      background: var(--modern-surface);
+      background: linear-gradient(180deg, #ffffff, #fbfdff);
       color: var(--modern-text);
       box-shadow: none;
     }
@@ -2613,6 +2859,29 @@
       outline: none;
     }
 
+    .publish-type {
+      padding: 0.35rem;
+      border: 1px solid var(--modern-border-soft);
+      border-radius: var(--modern-radius);
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(124, 58, 237, 0.05), rgba(240, 93, 106, 0.06));
+    }
+
+    .publish-type button,
+    .toolbar-btn.secondary,
+    .avatar-upload-btn,
+    .mini-edit-btn {
+      border-color: var(--modern-border-soft);
+      color: var(--modern-text);
+      background: #ffffff;
+    }
+
+    .publish-type button.active,
+    .publish-type button:hover {
+      color: #ffffff;
+      background: var(--gradient-main);
+      box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
+    }
+
     .toolbar-btn,
     .mini-edit-btn,
     .profile-tab {
@@ -2622,9 +2891,9 @@
     }
 
     .profile-tab.active {
-      color: var(--modern-text);
-      background: var(--modern-surface-muted);
-      box-shadow: inset 0 0 0 1px var(--modern-border);
+      color: #ffffff;
+      background: var(--gradient-main);
+      box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
     }
 
     [data-profile-panel="settings"] .me-panel {
@@ -2647,14 +2916,111 @@
       width: 100%;
     }
 
+    .contact-container {
+      align-items: stretch;
+    }
+
+    .commission-status,
+    .contact-form {
+      border: 1px solid var(--modern-border-soft);
+      border-radius: var(--modern-radius);
+      background: var(--modern-surface);
+      box-shadow: var(--modern-shadow-soft);
+    }
+
+    .commission-status {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 249, 252, 0.98)),
+        var(--gradient-brand-soft);
+    }
+
+    .status-badge {
+      background: linear-gradient(135deg, rgba(18, 185, 129, 0.14), rgba(245, 185, 66, 0.18));
+      color: #0f7b48;
+      border: 1px solid rgba(18, 185, 129, 0.18);
+    }
+
+    .price-list li,
+    .mini-item {
+      border-color: var(--modern-border-soft);
+      background: linear-gradient(180deg, #ffffff, #fbfdff);
+    }
+
+    .blog-list {
+      gap: 1.1rem;
+    }
+
+    .blog-item {
+      padding-top: 1.8rem;
+    }
+
+    .blog-date {
+      color: var(--brand-violet);
+      font-weight: 800;
+    }
+
+    .profile-hero {
+      border: 1px solid var(--modern-border-soft);
+      border-radius: var(--modern-radius);
+      background: var(--modern-surface);
+      box-shadow: var(--modern-shadow-soft);
+      overflow: hidden;
+    }
+
+    .me.page-section {
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    .me.page-section .profile-page {
+      width: 100%;
+      max-width: none;
+      margin-left: 0;
+      margin-right: 0;
+      padding-left: clamp(1rem, 2vw, 2rem);
+      padding-right: clamp(1rem, 2vw, 2rem);
+      box-sizing: border-box;
+    }
+
+    .me.page-section .profile-hero,
+    .me.page-section .profile-tabs,
+    .me.page-section .profile-tab-panel {
+      width: 100%;
+    }
+
+    .profile-cover {
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.94), rgba(124, 58, 237, 0.88) 45%, rgba(240, 93, 106, 0.86)),
+        linear-gradient(90deg, rgba(245, 185, 66, 0.28), transparent 52%, rgba(18, 185, 129, 0.24));
+    }
+
+    .profile-intro {
+      border-color: var(--modern-border-soft);
+      border-radius: var(--modern-radius);
+      background: linear-gradient(180deg, #ffffff, #fbfdff);
+      box-shadow: none;
+    }
+
+    .intro-kicker {
+      color: var(--modern-accent);
+      letter-spacing: 0;
+    }
+
+    footer {
+      background:
+        linear-gradient(135deg, #111827 0%, #1e293b 48%, #30204f 100%),
+        linear-gradient(90deg, rgba(245, 185, 66, 0.12), rgba(18, 185, 129, 0.1));
+      color: rgba(255, 255, 255, 0.78);
+    }
+
     .auth-page {
       width: 100%;
       min-height: calc(100vh - 64px);
       padding: 6.5rem 5% 3rem;
       background:
-        linear-gradient(180deg, rgba(246, 248, 250, 0.86), rgba(246, 248, 250, 1)),
-        radial-gradient(circle at 20% 20%, rgba(9, 105, 218, 0.08), transparent 32%),
-        radial-gradient(circle at 80% 10%, rgba(130, 80, 223, 0.08), transparent 28%);
+        linear-gradient(180deg, rgba(249, 251, 255, 0.88), rgba(244, 247, 251, 1)),
+        linear-gradient(120deg, rgba(37, 99, 235, 0.12), transparent 34%, rgba(240, 93, 106, 0.12)),
+        linear-gradient(45deg, rgba(245, 185, 66, 0.08), transparent 55%, rgba(18, 185, 129, 0.1));
     }
 
     .auth-page.active {
@@ -2674,7 +3040,7 @@
       border: 1px solid var(--modern-border);
       border-radius: var(--modern-radius);
       background: var(--modern-surface);
-      box-shadow: var(--modern-shadow);
+      box-shadow: 0 26px 70px rgba(23, 32, 51, 0.16);
     }
 
     .auth-modal::before {
@@ -2695,7 +3061,7 @@
       overflow: hidden;
       color: #ffffff;
       background:
-        linear-gradient(145deg, rgba(9, 17, 31, 0.98) 0%, rgba(17, 24, 39, 0.98) 48%, rgba(36, 41, 47, 0.98) 100%),
+        linear-gradient(145deg, rgba(9, 17, 31, 0.98) 0%, rgba(25, 42, 86, 0.98) 42%, rgba(80, 45, 119, 0.96) 70%, rgba(160, 54, 78, 0.94) 100%),
         linear-gradient(45deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 18px);
     }
 
@@ -2704,8 +3070,9 @@
       position: absolute;
       inset: 0;
       background:
-        linear-gradient(115deg, transparent 0 34%, rgba(255, 255, 255, 0.1) 35%, transparent 36% 100%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%);
+        linear-gradient(115deg, transparent 0 30%, rgba(255, 255, 255, 0.13) 31%, transparent 32% 100%),
+        linear-gradient(180deg, rgba(245, 185, 66, 0.18), transparent 32%),
+        linear-gradient(0deg, rgba(18, 185, 129, 0.14), transparent 40%);
       pointer-events: none;
     }
 
@@ -2828,6 +3195,25 @@
       nav {
         height: auto;
         min-height: 60px;
+      }
+
+      .home-content {
+        padding-top: 4rem;
+        text-align: center;
+      }
+
+      .home-content h1,
+      .home-content p {
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .section-title {
+        text-align: center;
+      }
+
+      .section-title::after {
+        margin-left: auto;
       }
 
       .auth-page {
@@ -2963,6 +3349,43 @@
     </div>
   </div>
 
+  <div class="artwork-detail hidden" id="inspirationDetail">
+    <div class="inspiration-detail-panel">
+      <div class="inspiration-detail-main">
+        <div class="artwork-detail-head">
+          <div>
+            <h3 id="inspirationDetailTitle">灵感详情</h3>
+            <span class="artwork-detail-tag" id="inspirationDetailTag">灵感</span>
+          </div>
+          <button class="detail-close" type="button" id="inspirationDetailClose" aria-label="关闭灵感详情">×</button>
+        </div>
+        <div class="inspiration-detail-meta">
+          <span id="inspirationDetailOwner"></span>
+          <span id="inspirationDetailDate"></span>
+        </div>
+        <div class="inspiration-detail-content" id="inspirationDetailContent"></div>
+      </div>
+      <div class="inspiration-detail-side">
+        <div class="artwork-detail-head">
+          <div>
+            <h3>评价</h3>
+            <span class="artwork-detail-tag" id="inspirationCommentCount">0 条</span>
+          </div>
+        </div>
+        <div class="comment-list" id="inspirationCommentList"></div>
+        <form class="comment-form" id="inspirationCommentForm">
+          <input id="inspirationCommentId" type="hidden">
+          <textarea id="inspirationCommentText" placeholder="留下你对这条灵感的评价"></textarea>
+          <div class="comment-tools">
+            <span class="comment-image-name" id="inspirationReplyHint">支持对评价回复，最多 2 层</span>
+            <button class="toolbar-btn secondary" type="button" id="cancelInspirationReplyBtn" hidden>取消回复</button>
+            <button class="submit-btn" type="submit">发布评价</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <nav id="navbar" class="">
     <div class="logo">星漫</div>
     <ul class="nav-links" id="navLinks">
@@ -3038,6 +3461,10 @@
           <div class="form-group" id="publishContentGroup" hidden>
             <label for="publishContent">灵感内容</label>
             <textarea id="publishContent" placeholder="记录你的创作想法、过程或心得"></textarea>
+          </div>
+          <div class="form-group" id="publishEditTimeGroup" hidden>
+            <label for="publishEditTime">最新编辑时间</label>
+            <input id="publishEditTime" type="text" readonly>
           </div>
           <div class="form-group" id="publishBudgetGroup" hidden>
             <label for="publishBudget">委托预算</label>
@@ -3119,7 +3546,7 @@
             <div class="profile-stats">
               <div><strong id="profileArtworkCount">0</strong><span>作品</span></div>
               <div><strong id="profileCommissionCount">0</strong><span>委托</span></div>
-              <div><strong>10+</strong><span>创作年限</span></div>
+              <div><strong id="profileCreativeYears">0</strong><span>创作年限</span></div>
             </div>
           </div>
           <div class="profile-actions">
@@ -3143,6 +3570,7 @@
 
       <div class="profile-tabs fade-in visible">
         <button class="profile-tab active" type="button" data-profile-tab="works">作品</button>
+        <button class="profile-tab" type="button" data-profile-tab="inspirations">灵感</button>
         <button class="profile-tab" type="button" data-profile-tab="commissions">委托</button>
         <button class="profile-tab" type="button" data-profile-tab="profile">资料</button>
         <button class="profile-tab" type="button" data-profile-tab="settings">设置</button>
@@ -3152,6 +3580,13 @@
         <div class="me-panel fade-in visible">
           <h3>我发布的画作</h3>
           <div class="mini-list" id="myArtworkList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="inspirations">
+        <div class="me-panel fade-in visible">
+          <h3>我发布的灵感</h3>
+          <div class="mini-list" id="myInspirationList"></div>
         </div>
       </div>
 
@@ -3199,6 +3634,10 @@
               <div class="form-group">
                 <label for="profileBirthday">生日</label>
                 <input id="profileBirthday" type="date">
+              </div>
+              <div class="form-group">
+                <label for="profileCreativeYearsInput">创作年限</label>
+                <input id="profileCreativeYearsInput" type="text" placeholder="例如：10+ / 3 年 / 2020 至今">
               </div>
               <div class="form-group">
                 <label for="profileSignature">简介</label>
@@ -4018,9 +4457,18 @@
       }
     }
 
+    function setPublishEditTime(value = '') {
+      const group = document.getElementById('publishEditTimeGroup');
+      const input = document.getElementById('publishEditTime');
+      if (!group || !input) return;
+      input.value = value || '';
+      group.hidden = !value;
+    }
+
     function setPublishType(type) {
       const isInspiration = type === 'inspiration';
       document.getElementById('publishType').value = type;
+      setPublishEditTime('');
       document.querySelectorAll('[data-publish-type]').forEach(button => {
         button.classList.toggle('active', button.dataset.publishType === type);
       });
@@ -4155,6 +4603,7 @@
       const isInspiration = type === 'inspiration';
       const isCommission = type === 'commission';
       document.getElementById('publishType').value = type;
+      setPublishEditTime('');
       document.querySelectorAll('[data-publish-type]').forEach(button => {
         button.classList.toggle('active', button.dataset.publishType === type);
       });
@@ -4470,8 +4919,8 @@
       blogList.querySelectorAll('[data-user-inspiration="true"]').forEach(item => item.remove());
       const items = getInspirations();
       const html = items.map(item => `
-        <article class="blog-item fade-in visible" data-user-inspiration="true">
-          <span class="blog-date">${escapeHTML(item.createdAt)} · ${escapeHTML(item.owner)}</span>
+        <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
+          <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
           <h3>${escapeHTML(item.title)}</h3>
           <p>${escapeHTML(item.content)}</p>
           <div class="blog-tags">
@@ -4606,6 +5055,7 @@
       document.getElementById('profileEmail').value = user.email || '';
       document.getElementById('profileGender').value = profile.gender || '';
       document.getElementById('profileBirthday').value = profile.birthday || '';
+      document.getElementById('profileCreativeYearsInput').value = profile.creativeYears || '';
       document.getElementById('profileSignature').value = signature;
       document.getElementById('profilePhilosophy').value = philosophy;
       document.getElementById('resetEmail').value = user.email || '';
@@ -4620,6 +5070,7 @@
       const philosophyText = document.getElementById('profilePhilosophyText');
       const artworkCount = document.getElementById('profileArtworkCount');
       const commissionCount = document.getElementById('profileCommissionCount');
+      const creativeYears = document.getElementById('profileCreativeYears');
 
       setAvatarElement(avatar, profile.avatar || '', displayName);
       setAvatarElement(avatarEdit, profile.avatar || '', displayName);
@@ -4633,6 +5084,7 @@
       renderSkillList('profileSkillEditorList', editingSkills, true);
       if (artworkCount) artworkCount.textContent = myCards.length;
       if (commissionCount) commissionCount.textContent = commissions.length;
+      if (creativeYears) creativeYears.textContent = profile.creativeYears || '0';
 
       document.getElementById('myArtworkList').innerHTML = myCards.length
         ? myCards.map(card => {
@@ -5240,6 +5692,10 @@
     }
 
     let inspirationCache = [];
+    let inspirationCommentCache = [];
+    let activeInspirationId = '';
+    let inspirationReplyTarget = '';
+    const expandedInspirationReplies = new Set();
 
     function normalizeProfile(profile = {}, username = '') {
       return {
@@ -5250,6 +5706,7 @@
         skills: [],
         gender: '',
         birthday: '',
+        creativeYears: '',
         signature: '',
         ...profile
       };
@@ -5406,7 +5863,24 @@
         title: item.title || '',
         tag: item.tag || '',
         content: item.content || '',
-        createdAt: item.created_at ? new Date(item.created_at).toLocaleDateString() : new Date().toLocaleDateString()
+        createdAt: item.created_at ? new Date(item.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+        updatedAt: item.updated_at ? new Date(item.updated_at).toLocaleString() : ''
+      };
+    }
+
+    function getInspirationDisplayTime(item) {
+      return item?.updatedAt || item?.createdAt || '';
+    }
+
+    function inspirationCommentFromApi(item) {
+      return {
+        id: String(item.id),
+        parent: item.parent ? String(item.parent) : '',
+        reviewer: item.reviewer_username || item.reviewer || '',
+        content: item.content || '',
+        likeCount: Number(item.like_count || 0),
+        liked: !!item.liked,
+        createdAt: item.created_at ? new Date(item.created_at).toLocaleString() : ''
       };
     }
 
@@ -5452,8 +5926,8 @@
       }
       blogList.innerHTML = '';
       const html = getInspirations().map(item => `
-        <article class="blog-item fade-in visible" data-user-inspiration="true">
-          <span class="blog-date">${escapeHTML(item.createdAt)} · ${escapeHTML(item.owner)}</span>
+        <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
+          <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
           <h3>${escapeHTML(item.title)}</h3>
           <p>${escapeHTML(item.content)}</p>
           <div class="blog-tags">
@@ -5463,6 +5937,175 @@
       `).join('');
       blogList.innerHTML = html || '<div class="empty-state">暂无灵感日志</div>';
     };
+
+    function getInspirationById(id) {
+      return getInspirations().find(item => String(item.id) === String(id));
+    }
+
+    async function fetchInspirationComments(inspirationId) {
+      const data = await apiRequest(`/inspirations/${encodeURIComponent(inspirationId)}/comments/`);
+      inspirationCommentCache = apiList(data).map(inspirationCommentFromApi);
+      return inspirationCommentCache;
+    }
+
+    function renderInspirationReplyForm(parentId) {
+      return '';
+    }
+
+    function updateInspirationComposer() {
+      const textEl = document.getElementById('inspirationCommentText');
+      const hintEl = document.getElementById('inspirationReplyHint');
+      const cancelBtn = document.getElementById('cancelInspirationReplyBtn');
+      const submitBtn = document.querySelector('#inspirationCommentForm .submit-btn');
+      const target = inspirationReplyTarget
+        ? inspirationCommentCache.find(item => String(item.id) === String(inspirationReplyTarget))
+        : null;
+      if (textEl) {
+        textEl.placeholder = target ? `回复 ${target.reviewer || '这条评价'}` : '留下你对这条灵感的评价';
+      }
+      if (hintEl) {
+        hintEl.textContent = target ? `正在回复：${target.reviewer || '这条评价'}` : '支持对评价回复，最多 2 层';
+      }
+      if (cancelBtn) cancelBtn.hidden = !target;
+      if (submitBtn) submitBtn.textContent = target ? '发布回复' : '发布评价';
+    }
+
+    function renderInspirationCommentItem(item, isReply = false) {
+      const users = getUsers();
+      const user = users[item.reviewer] || { username: item.reviewer, profile: {} };
+      const name = getDisplayName(user) || item.reviewer || '访客';
+      const avatar = user.profile?.avatar || '';
+      const avatarHtml = avatar ? `<img src="${escapeHTML(avatar)}" alt="${escapeHTML(name)}">` : escapeHTML((name || '?').slice(0, 1));
+      const likedClass = item.liked ? ' liked' : '';
+      return `
+        <div class="comment-item${isReply ? ' reply' : ''}">
+          <div class="comment-avatar">${avatarHtml}</div>
+          <div class="comment-bubble">
+            <div class="comment-author">${escapeHTML(name)}</div>
+            <div class="comment-text">${escapeHTML(item.content)}</div>
+            <div class="comment-time">${escapeHTML(item.createdAt)}</div>
+            <button class="comment-like${likedClass}" type="button" onclick="toggleInspirationCommentLike('${escapeHTML(item.id)}')">赞 ${item.likeCount}</button>
+            ${isReply ? '' : `<button class="comment-reply" type="button" onclick="showInspirationReply('${escapeHTML(item.id)}')">回复</button>`}
+          </div>
+          ${isReply ? '' : renderInspirationReplyForm(item.id)}
+        </div>
+      `;
+    }
+
+    function renderInspirationComments() {
+      const list = document.getElementById('inspirationCommentList');
+      if (!list) return;
+      const rootComments = inspirationCommentCache.filter(item => !item.parent);
+      const repliesByParent = inspirationCommentCache.reduce((acc, item) => {
+        if (!item.parent) return acc;
+        if (!acc[item.parent]) acc[item.parent] = [];
+        acc[item.parent].push(item);
+        return acc;
+      }, {});
+      const countEl = document.getElementById('inspirationCommentCount');
+      if (countEl) countEl.textContent = `${inspirationCommentCache.length} 条`;
+      if (!rootComments.length) {
+        list.innerHTML = '<div class="empty-state">暂无评价，来写下第一条吧。</div>';
+        updateInspirationComposer();
+        return;
+      }
+      list.innerHTML = rootComments.map(item => {
+        const replies = repliesByParent[item.id] || [];
+        const expanded = expandedInspirationReplies.has(item.id);
+        const visibleReplies = replies.slice(0, expanded ? 20 : 6);
+        const expandHtml = replies.length > 6
+          ? `<button class="comment-expand" type="button" onclick="toggleInspirationReplies('${escapeHTML(item.id)}')">${expanded ? '收起回复' : `展开更多回复（${Math.min(replies.length, 20)}）`}</button>`
+          : '';
+        return `
+          ${renderInspirationCommentItem(item)}
+          ${visibleReplies.length ? `<div class="comment-replies">${visibleReplies.map(reply => renderInspirationCommentItem(reply, true)).join('')}${expandHtml}</div>` : ''}
+        `;
+      }).join('');
+      updateInspirationComposer();
+    }
+
+    async function openInspirationDetail(inspirationId) {
+      const item = getInspirationById(inspirationId);
+      if (!item) return;
+      activeInspirationId = String(inspirationId);
+      inspirationReplyTarget = '';
+      document.getElementById('inspirationDetailTitle').textContent = item.title;
+      document.getElementById('inspirationDetailTag').textContent = item.tag || '灵感';
+      document.getElementById('inspirationDetailOwner').textContent = item.owner ? `作者：${item.owner}` : '';
+      document.getElementById('inspirationDetailDate').textContent = getInspirationDisplayTime(item) ? `时间：${getInspirationDisplayTime(item)}` : '';
+      document.getElementById('inspirationDetailContent').textContent = item.content;
+      document.getElementById('inspirationCommentId').value = activeInspirationId;
+      document.getElementById('inspirationCommentText').value = '';
+      updateInspirationComposer();
+      document.getElementById('inspirationDetail').classList.remove('hidden');
+      try {
+        await fetchInspirationComments(activeInspirationId);
+      } catch (error) {
+        console.warn('Inspiration comments API unavailable:', error);
+        inspirationCommentCache = [];
+      }
+      renderInspirationComments();
+    }
+
+    function closeInspirationDetail() {
+      document.getElementById('inspirationDetail').classList.add('hidden');
+      activeInspirationId = '';
+      inspirationReplyTarget = '';
+      inspirationCommentCache = [];
+      updateInspirationComposer();
+    }
+
+    async function submitInspirationComment(parentId = '') {
+      if (!activeInspirationId) return;
+      if (!requireLogin('请先登录后再发布评价。')) return;
+      const replyParentId = parentId || inspirationReplyTarget || '';
+      const textEl = document.getElementById('inspirationCommentText');
+      const content = textEl?.value.trim() || '';
+      if (!content) return alert('请填写评价内容。');
+      await apiRequest(`/inspirations/${encodeURIComponent(activeInspirationId)}/comments/`, {
+        method: 'POST',
+        body: JSON.stringify({ content, parent: replyParentId || null })
+      });
+      if (textEl) textEl.value = '';
+      inspirationReplyTarget = '';
+      await fetchInspirationComments(activeInspirationId);
+      renderInspirationComments();
+    }
+
+    function submitInspirationReply(event, parentId) {
+      event.preventDefault();
+      submitInspirationComment(parentId);
+    }
+
+    function showInspirationReply(parentId) {
+      if (!requireLogin('请先登录后再回复评价。')) return;
+      inspirationReplyTarget = String(parentId);
+      renderInspirationComments();
+      updateInspirationComposer();
+      setTimeout(() => document.getElementById('inspirationCommentText')?.focus(), 0);
+    }
+
+    function cancelInspirationReply() {
+      inspirationReplyTarget = '';
+      renderInspirationComments();
+      updateInspirationComposer();
+    }
+
+    function toggleInspirationReplies(parentId) {
+      if (expandedInspirationReplies.has(parentId)) expandedInspirationReplies.delete(parentId);
+      else expandedInspirationReplies.add(parentId);
+      renderInspirationComments();
+    }
+
+    async function toggleInspirationCommentLike(commentId) {
+      if (!requireLogin('请先登录后再点赞评价。')) return;
+      await apiRequest(`/inspirations/${encodeURIComponent(activeInspirationId)}/comments/${encodeURIComponent(commentId)}/like/`, {
+        method: 'POST',
+        body: JSON.stringify({})
+      });
+      await fetchInspirationComments(activeInspirationId);
+      renderInspirationComments();
+    }
 
     commissionToApiPayload = function(item) {
       return {
@@ -5496,26 +6139,103 @@
       commissionCache = commissions.map(normalizeCommissionItem);
     };
 
+    function canManageInspiration(item) {
+      return !!currentUser && !!item && (item.owner === currentUser.username || isAdmin());
+    }
+
+    function refreshMyInspirationList() {
+      const list = document.getElementById('myInspirationList');
+      if (!list || !currentUser) return;
+      const items = getInspirations().filter(item => item.owner === currentUser.username);
+      list.innerHTML = items.length
+        ? items.map(item => `
+          <div class="mini-item">
+            <div class="mini-body">
+              <strong>${escapeHTML(item.title)}</strong>
+              <span>${escapeHTML(item.tag || '灵感')} · ${escapeHTML(getInspirationDisplayTime(item))}</span>
+            </div>
+            <div class="mini-actions">
+              <button type="button" class="mini-edit-btn" onclick="openInspirationDetail('${escapeHTML(item.id)}')">查看</button>
+              <button type="button" class="mini-edit-btn" onclick="editMyInspiration('${escapeHTML(item.id)}')">编辑</button>
+              <button type="button" class="mini-edit-btn mini-danger-btn" onclick="deleteMyInspiration('${escapeHTML(item.id)}')">删除</button>
+            </div>
+          </div>
+        `).join('')
+        : '<div class="empty-state">还没有发布灵感。</div>';
+    }
+
+    async function ensureInspirationsLoaded() {
+      if (getInspirations().length) return;
+      try {
+        await loadInspirationsFromApi();
+      } catch (error) {
+        console.warn('Inspiration API unavailable:', error);
+      }
+    }
+
+    const inspirationAwareRenderMePage = renderMePage;
+    renderMePage = function() {
+      inspirationAwareRenderMePage();
+      refreshMyInspirationList();
+      ensureInspirationsLoaded().then(() => refreshMyInspirationList());
+    };
+
+    function editMyInspiration(inspirationId) {
+      if (!requireLogin('请先登录后再编辑灵感。')) return;
+      const item = getInspirationById(inspirationId);
+      if (!canManageInspiration(item)) return alert('只能编辑自己发布的灵感。');
+      editingCommissionId = '';
+      document.getElementById('publishImageInput').value = '';
+      document.getElementById('publishName').value = item.title || '';
+      document.getElementById('publishTag').value = item.tag || '';
+      document.getElementById('publishContent').value = item.content || '';
+      document.getElementById('publishBudget').value = '';
+      setPublishImage('');
+      setPublishType('inspiration');
+      document.getElementById('publishCardId').value = item.id;
+      setPublishEditTime(getInspirationDisplayTime(item));
+      document.getElementById('publishPageTitle').textContent = '编辑灵感';
+      document.getElementById('publishSubmitBtn').textContent = '保存灵感';
+      switchPage('publish');
+    }
+
+    async function deleteMyInspiration(inspirationId) {
+      if (!requireLogin('请先登录后再删除灵感。')) return;
+      const item = getInspirationById(inspirationId);
+      if (!canManageInspiration(item)) return alert('只能删除自己发布的灵感。');
+      if (!confirm('确定要删除这条灵感吗？')) return;
+      try {
+        await apiRequest(`/inspirations/${encodeURIComponent(inspirationId)}/`, { method: 'DELETE' });
+        await renderInspirations();
+        renderMePage();
+      } catch (error) {
+        alert(error.message || '删除灵感失败，请确认后端服务已启动。');
+      }
+    }
+
     const secureSavePublishForm = savePublishForm;
     savePublishForm = async function() {
       const type = document.getElementById('publishType').value;
       if (type !== 'inspiration') return secureSavePublishForm();
       if (!requireLogin('请先登录后再发布灵感。')) return;
+      const inspirationId = document.getElementById('publishCardId').value;
       const title = document.getElementById('publishName').value.trim();
       const tag = document.getElementById('publishTag').value.trim();
       const content = document.getElementById('publishContent').value.trim();
       if (!title || !tag) return alert('请填写灵感标题和标签。');
       if (!content) return alert('请填写灵感内容。');
       try {
-        await apiRequest('/inspirations/', {
-          method: 'POST',
+        await apiRequest(inspirationId ? `/inspirations/${encodeURIComponent(inspirationId)}/` : '/inspirations/', {
+          method: inspirationId ? 'PATCH' : 'POST',
           body: JSON.stringify({ title, tag, content })
         });
         document.getElementById('publishForm').reset();
         setPublishImage('');
+        document.getElementById('publishCardId').value = '';
         setPublishType('artwork');
         await renderInspirations();
-        switchPage('blog');
+        renderMePage();
+        switchPage(inspirationId ? 'me' : 'blog');
       } catch (error) {
         alert(error.message || '灵感保存到数据库失败，请确认后端服务已启动。');
       }
@@ -5637,6 +6357,19 @@
       if (event.target.id === 'artworkDetail') closeArtworkDetail();
     });
 
+    document.getElementById('inspirationDetailClose').addEventListener('click', closeInspirationDetail);
+
+    document.getElementById('inspirationDetail').addEventListener('click', event => {
+      if (event.target.id === 'inspirationDetail') closeInspirationDetail();
+    });
+
+    document.getElementById('inspirationCommentForm').addEventListener('submit', event => {
+      event.preventDefault();
+      submitInspirationComment();
+    });
+
+    document.getElementById('cancelInspirationReplyBtn')?.addEventListener('click', cancelInspirationReply);
+
     document.getElementById('commentImageBtn').addEventListener('click', () => {
       if (!requireLogin('请先登录后再发布评价。')) return;
       document.getElementById('commentImageInput').click();
@@ -5662,6 +6395,7 @@
       if (event.key === 'Escape') {
         closeImagePreview();
         closeArtworkDetail();
+        closeInspirationDetail();
       }
     });
 
@@ -5704,6 +6438,7 @@
         displayName: document.getElementById('profileDisplayNameInput').value.trim() || user.username,
         gender: document.getElementById('profileGender').value,
         birthday: document.getElementById('profileBirthday').value,
+        creativeYears: document.getElementById('profileCreativeYearsInput').value.trim(),
         signature: document.getElementById('profileSignature').value.trim(),
         intro: document.getElementById('profileSignature').value.trim(),
         philosophy: document.getElementById('profilePhilosophy').value.trim(),
