@@ -29,6 +29,9 @@ let editingCommissionId = '';
 let commissionCache = [];
 let commissionOptionsCache = [];
 let editingSkills = [];
+let artworkCommentSyncTimer = null;
+let artworkCommentSyncBusy = false;
+const COMMENT_SYNC_INTERVAL = 1000;
 
 const escapeHTML = (value = '') => String(value).replace(/[&<>'\"]/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '\"': '&quot;'
@@ -617,6 +620,31 @@ async function renderArtworkComments(cardId) {
   updateCommentButtons();
 }
 
+async function syncOpenArtworkComments() {
+  const modal = document.getElementById('artworkDetail');
+  const cardId = document.getElementById('commentCardId')?.value;
+  if (!modal || modal.classList.contains('hidden') || !cardId || artworkCommentSyncBusy) return;
+  artworkCommentSyncBusy = true;
+  try {
+    await renderArtworkComments(cardId);
+  } catch (error) {
+    console.warn('Artwork comments sync failed:', error);
+  } finally {
+    artworkCommentSyncBusy = false;
+  }
+}
+
+function startArtworkCommentSync() {
+  stopArtworkCommentSync();
+  artworkCommentSyncTimer = window.setInterval(syncOpenArtworkComments, COMMENT_SYNC_INTERVAL);
+}
+
+function stopArtworkCommentSync() {
+  if (!artworkCommentSyncTimer) return;
+  window.clearInterval(artworkCommentSyncTimer);
+  artworkCommentSyncTimer = null;
+}
+
 function openArtworkDetail(cardOrId) {
   const card = typeof cardOrId === 'string' ? getGalleryCard(cardOrId) : cardOrId;
   const data = getCardData(card);
@@ -631,9 +659,11 @@ function openArtworkDetail(cardOrId) {
   commentImageSrc = '';
   renderArtworkComments(data.id);
   document.getElementById('artworkDetail').classList.remove('hidden');
+  startArtworkCommentSync();
 }
 
 function closeArtworkDetail() {
+  stopArtworkCommentSync();
   document.getElementById('artworkDetail').classList.add('hidden');
   document.getElementById('detailImage').removeAttribute('src');
   document.getElementById('commentCardId').value = '';
@@ -2026,6 +2056,8 @@ let inspirationCache = [];
 let inspirationCommentCache = [];
 let activeInspirationId = '';
 let inspirationReplyTarget = '';
+let inspirationCommentSyncTimer = null;
+let inspirationCommentSyncBusy = false;
 const expandedInspirationReplies = new Set();
 
 function normalizeProfile(profile = {}, username = '') {
@@ -2355,6 +2387,31 @@ function renderInspirationComments() {
   updateInspirationComposer();
 }
 
+async function syncOpenInspirationComments() {
+  const modal = document.getElementById('inspirationDetail');
+  if (!modal || modal.classList.contains('hidden') || !activeInspirationId || inspirationCommentSyncBusy) return;
+  inspirationCommentSyncBusy = true;
+  try {
+    await fetchInspirationComments(activeInspirationId);
+    renderInspirationComments();
+  } catch (error) {
+    console.warn('Inspiration comments sync failed:', error);
+  } finally {
+    inspirationCommentSyncBusy = false;
+  }
+}
+
+function startInspirationCommentSync() {
+  stopInspirationCommentSync();
+  inspirationCommentSyncTimer = window.setInterval(syncOpenInspirationComments, COMMENT_SYNC_INTERVAL);
+}
+
+function stopInspirationCommentSync() {
+  if (!inspirationCommentSyncTimer) return;
+  window.clearInterval(inspirationCommentSyncTimer);
+  inspirationCommentSyncTimer = null;
+}
+
 async function openInspirationDetail(inspirationId) {
   const item = getInspirationById(inspirationId);
   if (!item) return;
@@ -2376,9 +2433,11 @@ async function openInspirationDetail(inspirationId) {
     inspirationCommentCache = [];
   }
   renderInspirationComments();
+  startInspirationCommentSync();
 }
 
 function closeInspirationDetail() {
+  stopInspirationCommentSync();
   document.getElementById('inspirationDetail').classList.add('hidden');
   activeInspirationId = '';
   inspirationReplyTarget = '';

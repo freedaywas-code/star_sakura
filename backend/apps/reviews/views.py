@@ -24,7 +24,7 @@ class ReviewViewSet(ApiResponseMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = self.queryset
-        if self.action in ["list", "retrieve"] or (self.request.user.is_authenticated and self.request.user.is_admin):
+        if self.action in ["list", "retrieve", "like"] or (self.request.user.is_authenticated and self.request.user.is_admin):
             return queryset
         return queryset.filter(Q(reviewer=self.request.user) | Q(target_user=self.request.user))
 

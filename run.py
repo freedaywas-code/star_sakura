@@ -28,6 +28,11 @@ def run_command(command, cwd=None, env=None):
     subprocess.check_call([str(part) for part in command], cwd=cwd, env=env)
 
 
+def start_process(command, cwd=None, env=None):
+    print("+ " + " ".join(str(part) for part in command))
+    return subprocess.Popen([str(part) for part in command], cwd=cwd, env=env)
+
+
 def load_env_file(path):
     env = os.environ.copy()
     if not path.exists():
@@ -141,6 +146,55 @@ def open_browser(url):
     Thread(target=_open, daemon=True).start()
 
 
+def backend_health_url(port):
+    return f"http://127.0.0.1:{port}/api/health/"
+
+
+def wait_for_backend(port, timeout=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with request.urlopen(backend_health_url(port), timeout=2) as response:
+                if response.status == 200:
+                    print(f"Backend health: ok ({backend_health_url(port)})")
+                    return True
+        except Exception:
+            time.sleep(1)
+    print(f"Backend health: not ready after {timeout}s ({backend_health_url(port)})")
+    return False
+
+
+def stop_process(process):
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def supervise_backend(command, cwd, env, max_restarts):
+    restarts = 0
+    while True:
+        process = start_process(command, cwd=cwd, env=env)
+        try:
+            exit_code = process.wait()
+        except KeyboardInterrupt:
+            stop_process(process)
+            raise
+        if exit_code == 0:
+            return 0
+        if restarts >= max_restarts:
+            print(f"Backend stopped with code {exit_code}; restart limit reached.")
+            return exit_code
+        restarts += 1
+        delay = min(2 * restarts, 10)
+        print(f"Backend stopped with code {exit_code}; restarting in {delay}s ({restarts}/{max_restarts})...")
+        time.sleep(delay)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Star Sakura in a portable local environment.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -149,6 +203,7 @@ def main():
     parser.add_argument("--skip-install", action="store_true", help="Skip pip install when dependencies are ready.")
     parser.add_argument("--no-frontend", action="store_true", help="Run backend only.")
     parser.add_argument("--no-browser", action="store_true", help="Do not open the frontend page automatically.")
+    parser.add_argument("--backend-restarts", type=int, default=3, help="Restart backend this many times if it exits unexpectedly.")
     args = parser.parse_args()
 
     if sys.version_info < (3, 10):
@@ -160,6 +215,10 @@ def main():
 
     prepare_database(env)
 
+    backend_command = [venv_python(), "manage.py", "runserver", f"{args.host}:{args.backend_port}"]
+    backend_process = start_process(backend_command, cwd=BACKEND, env=env)
+    wait_for_backend(args.backend_port)
+
     if not args.no_frontend:
         thread = Thread(target=serve_frontend, args=(args.host, args.frontend_port, args.backend_port), daemon=True)
         thread.start()
@@ -167,11 +226,15 @@ def main():
             open_browser(f"http://{args.host}:{args.frontend_port}")
 
     print(f"Backend:  http://{args.host}:{args.backend_port}")
-    run_command(
-        [venv_python(), "manage.py", "runserver", f"{args.host}:{args.backend_port}"],
-        cwd=BACKEND,
-        env=env,
-    )
+    try:
+        exit_code = backend_process.wait()
+        if exit_code != 0:
+            print(f"Backend stopped with code {exit_code}; entering supervised restart mode.")
+            exit_code = supervise_backend(backend_command, BACKEND, env, args.backend_restarts)
+        raise SystemExit(exit_code)
+    except KeyboardInterrupt:
+        stop_process(backend_process)
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":
