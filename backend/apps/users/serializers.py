@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -61,10 +62,7 @@ class LoginSerializer(TokenObtainPairSerializer):
         username = raw_username.strip()
         user = None
         if username:
-            user = (
-                User.objects.filter(username__iexact=username).first()
-                or User.objects.filter(email__iexact=username).first()
-            )
+            user = User.objects.filter(Q(username__iexact=username) | Q(email__iexact=username)).first()
             if user:
                 attrs[self.username_field] = user.get_username()
         try:

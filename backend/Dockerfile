@@ -12,4 +12,4 @@ COPY backend /app/backend
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python manage.py makemigrations && python manage.py migrate && python manage.py ensure_default_admin && python manage.py seed_initial_inspirations && python manage.py seed_commission_options && python manage.py runserver 0.0.0.0:8000"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py ensure_default_admin && python manage.py seed_initial_artworks && python manage.py seed_initial_inspirations && python manage.py seed_commission_options && gunicorn configs.wsgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-3} --threads ${GUNICORN_THREADS:-4} --timeout ${GUNICORN_TIMEOUT:-60} --max-requests ${GUNICORN_MAX_REQUESTS:-1000} --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-100}"]

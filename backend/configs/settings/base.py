@@ -16,6 +16,13 @@ def env_list(name, default=None):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def env_int(name, default=0):
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    return int(value)
+
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-only-star-sakura-secret-key")
@@ -44,6 +51,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -72,12 +80,30 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "configs.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": os.getenv("SQLITE_NAME", BASE_DIR / "db.sqlite3"),
+DATABASE_ENGINE = os.getenv("DATABASE_ENGINE", "sqlite").lower()
+if DATABASE_ENGINE in {"postgres", "postgresql"}:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("POSTGRES_DB", "star_sakura"),
+            "USER": os.getenv("POSTGRES_USER", "star_sakura"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),
+            "HOST": os.getenv("POSTGRES_HOST", "127.0.0.1"),
+            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+            "CONN_MAX_AGE": env_int("DB_CONN_MAX_AGE", 60),
+            "OPTIONS": {
+                "connect_timeout": env_int("DB_CONNECT_TIMEOUT", 5),
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.getenv("SQLITE_NAME", BASE_DIR / "db.sqlite3"),
+            "CONN_MAX_AGE": env_int("DB_CONN_MAX_AGE", 30),
+        }
+    }
 
 AUTH_USER_MODEL = "users.User"
 
@@ -95,8 +121,17 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024)
+FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024)
+MAX_IMAGE_UPLOAD_SIZE = env_int("MAX_IMAGE_UPLOAD_SIZE", 5 * 1024 * 1024)
+PUBLIC_API_CACHE_TIMEOUT = env_int("PUBLIC_API_CACHE_TIMEOUT", 30)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -114,5 +149,43 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": os.getenv("DRF_ANON_THROTTLE_RATE", "120/min"),
+        "user": os.getenv("DRF_USER_THROTTLE_RATE", "1200/min"),
+        "login": os.getenv("DRF_LOGIN_THROTTLE_RATE", "10/min"),
+        "write": os.getenv("DRF_WRITE_THROTTLE_RATE", "120/min"),
+    },
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
 }
+
+REDIS_URL = os.getenv("REDIS_URL", "")
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": True,
+            },
+            "KEY_PREFIX": os.getenv("CACHE_KEY_PREFIX", "star_sakura"),
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "star-sakura",
+        }
+    }
+
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = env_bool("CSRF_COOKIE_HTTPONLY", False)
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"

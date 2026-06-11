@@ -29,6 +29,7 @@ class InspirationComment(models.Model):
     content = models.TextField()
     like_count = models.PositiveIntegerField(default=0)
     liked_by = models.JSONField(default=list, blank=True)
+    liked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="liked_inspiration_comments", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

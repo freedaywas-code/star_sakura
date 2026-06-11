@@ -2,13 +2,14 @@ from django.db.models import Count
 from rest_framework import permissions, viewsets
 from rest_framework.exceptions import PermissionDenied
 
+from common.caching import CachedPublicReadMixin
 from common.response import ApiResponseMixin
 
 from .models import Artwork
 from .serializers import ArtworkSerializer
 
 
-class ArtworkViewSet(ApiResponseMixin, viewsets.ModelViewSet):
+class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelViewSet):
     serializer_class = ArtworkSerializer
     filterset_fields = ["owner", "category", "is_available"]
     search_fields = ["title", "description", "category"]

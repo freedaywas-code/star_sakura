@@ -97,6 +97,42 @@ frontend/index.html
 python run.py --no-frontend
 ```
 
+## 生产与高并发优化
+
+项目现在提供 `configs.settings.prod` 生产配置，并在 Docker 部署中使用 Postgres、Redis 和 Gunicorn：
+
+- Postgres 替代 SQLite，支持更高并发写入和更稳定的数据持久化。
+- Redis 用于缓存与限流计数，降低公开列表接口对数据库的压力。
+- Gunicorn 使用多 worker + 多线程运行 Django，避免生产环境使用 `runserver`。
+- 登录、匿名访问和写操作都配置了 DRF 限流，防止接口被高频请求拖垮。
+- 下单、接单、点赞、定制状态流转使用事务与行锁，避免并发覆盖数据。
+- 上传图片增加了格式与大小限制，默认最大 5MB。
+
+生产环境建议至少设置：
+
+```env
+DJANGO_SETTINGS_MODULE=configs.settings.prod
+DJANGO_SECRET_KEY=replace-with-a-long-random-secret
+DJANGO_DEBUG=false
+DJANGO_ALLOWED_HOSTS=example.com,www.example.com
+CORS_ALLOWED_ORIGINS=https://example.com,https://www.example.com
+CSRF_TRUSTED_ORIGINS=https://example.com,https://www.example.com
+DATABASE_ENGINE=postgresql
+POSTGRES_DB=star_sakura
+POSTGRES_USER=star_sakura
+POSTGRES_PASSWORD=replace-with-a-strong-password
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+REDIS_URL=redis://redis:6379/1
+SECURE_SSL_REDIRECT=true
+SECURE_HSTS_SECONDS=31536000
+PUBLIC_API_CACHE_TIMEOUT=30
+DRF_ANON_THROTTLE_RATE=120/min
+DRF_USER_THROTTLE_RATE=1200/min
+DRF_LOGIN_THROTTLE_RATE=10/min
+DRF_WRITE_THROTTLE_RATE=120/min
+```
+
 ## 手动运行后端
 
 ```bash

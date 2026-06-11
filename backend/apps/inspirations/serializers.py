@@ -23,6 +23,7 @@ class InspirationSerializer(serializers.ModelSerializer):
 
 class InspirationCommentSerializer(serializers.ModelSerializer):
     reviewer_username = serializers.CharField(source="reviewer.username", read_only=True)
+    liked_by = serializers.SerializerMethodField()
     liked = serializers.SerializerMethodField()
 
     class Meta:
@@ -54,5 +55,23 @@ class InspirationCommentSerializer(serializers.ModelSerializer):
 
     def get_liked(self, obj):
         request = self.context.get("request")
-        username = request.user.username if request and request.user.is_authenticated else ""
-        return username in (obj.liked_by or [])
+        user_id = request.user.id if request and request.user.is_authenticated else None
+        return bool(user_id and user_id in self._liked_user_ids(obj))
+
+    def get_liked_by(self, obj):
+        return self._liked_usernames(obj)
+
+    def _liked_user_cache(self, obj):
+        if not hasattr(obj, "_liked_user_cache"):
+            users = list(obj.liked_users.all())
+            obj._liked_user_cache = {
+                "ids": {user.id for user in users},
+                "usernames": [user.username for user in users],
+            }
+        return obj._liked_user_cache
+
+    def _liked_user_ids(self, obj):
+        return self._liked_user_cache(obj)["ids"]
+
+    def _liked_usernames(self, obj):
+        return self._liked_user_cache(obj)["usernames"]

@@ -1,14 +1,18 @@
+from django.db import transaction
+from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
+from common.caching import CachedPublicReadMixin
 from common.response import ApiResponseMixin, ok
+from common.throttling import WriteScopedThrottleMixin
 
 from .models import Inspiration, InspirationComment
 from .serializers import InspirationCommentSerializer, InspirationSerializer
 
 
-class InspirationViewSet(ApiResponseMixin, viewsets.ModelViewSet):
+class InspirationViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiResponseMixin, viewsets.ModelViewSet):
     serializer_class = InspirationSerializer
     filterset_fields = ["owner", "tag"]
     search_fields = ["title", "tag", "content", "owner__username"]
@@ -51,6 +55,7 @@ class InspirationViewSet(ApiResponseMixin, viewsets.ModelViewSet):
                 InspirationComment.objects
                 .filter(inspiration=inspiration)
                 .select_related("reviewer", "parent")
+                .prefetch_related("liked_users")
                 .order_by("created_at")
             )
             serializer = InspirationCommentSerializer(queryset, many=True, context={"request": request})
@@ -74,18 +79,19 @@ class InspirationViewSet(ApiResponseMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path=r"comments/(?P<comment_pk>[^/.]+)/like")
     def comment_like(self, request, pk=None, comment_pk=None):
         inspiration = self.get_object()
-        try:
-            comment = InspirationComment.objects.get(pk=comment_pk, inspiration=inspiration)
-        except InspirationComment.DoesNotExist:
-            raise ValidationError("Comment does not exist.")
+        with transaction.atomic():
+            comment = get_object_or_404(
+                InspirationComment.objects.select_for_update().prefetch_related("liked_users"),
+                pk=comment_pk,
+                inspiration=inspiration,
+            )
 
-        liked_by = list(comment.liked_by or [])
-        if request.user.username in liked_by:
-            liked_by.remove(request.user.username)
-        else:
-            liked_by.append(request.user.username)
-        comment.liked_by = liked_by
-        comment.like_count = len(liked_by)
-        comment.save(update_fields=["liked_by", "like_count"])
+            if comment.liked_users.filter(pk=request.user.pk).exists():
+                comment.liked_users.remove(request.user)
+            else:
+                comment.liked_users.add(request.user)
+            comment.like_count = comment.liked_users.count()
+            comment.liked_by = list(comment.liked_users.values_list("username", flat=True))
+            comment.save(update_fields=["liked_by", "like_count"])
         serializer = InspirationCommentSerializer(comment, context={"request": request})
         return ok(serializer.data, status=status.HTTP_200_OK)

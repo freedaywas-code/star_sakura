@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.db.models import Q
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import AuthenticationFailed
@@ -23,15 +24,13 @@ class RegisterView(ApiResponseMixin, CreateAPIView):
 
 class LoginView(ApiResponseMixin, APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "login"
 
     def post(self, request):
         raw_username = request.data.get("username") or request.data.get("email") or ""
         password = request.data.get("password") or ""
         username = str(raw_username).strip()
-        user = (
-            User.objects.filter(username__iexact=username).first()
-            or User.objects.filter(email__iexact=username).first()
-        )
+        user = User.objects.filter(Q(username__iexact=username) | Q(email__iexact=username)).first()
         auth_user = authenticate(request, username=user.get_username(), password=password) if user else None
 
         if not auth_user or not auth_user.is_active:

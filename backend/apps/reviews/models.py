@@ -13,6 +13,7 @@ class Review(models.Model):
     image = models.ImageField("评价图片", upload_to="reviews/%Y/%m/", blank=True, null=True)
     like_count = models.PositiveIntegerField("点赞数", default=0)
     liked_by = models.JSONField("点赞用户", default=list, blank=True)
+    liked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="liked_reviews", blank=True)
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
     updated_at = models.DateTimeField("更新时间", auto_now=True)
 

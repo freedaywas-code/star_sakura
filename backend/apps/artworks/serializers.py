@@ -1,8 +1,6 @@
-import base64
-import uuid
-
-from django.core.files.base import ContentFile
 from rest_framework import serializers
+
+from common.images import decode_base64_image
 
 from .models import Artwork
 
@@ -45,14 +43,7 @@ class ArtworkSerializer(serializers.ModelSerializer):
         return obj.reviews.count()
 
     def _decode_image(self, image_data):
-        if not image_data:
-            return None
-        if ";base64," in image_data:
-            header, image_data = image_data.split(";base64,", 1)
-            ext = header.split("/")[-1] or "png"
-        else:
-            ext = "png"
-        return ContentFile(base64.b64decode(image_data), name=f"{uuid.uuid4().hex}.{ext}")
+        return decode_base64_image(image_data)
 
     def create(self, validated_data):
         image_data = validated_data.pop("image_data", "")

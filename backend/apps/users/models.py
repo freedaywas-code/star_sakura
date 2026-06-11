@@ -12,6 +12,10 @@ class User(AbstractUser):
     class Meta:
         verbose_name = "用户"
         verbose_name_plural = "用户"
+        indexes = [
+            models.Index(fields=["email"]),
+            models.Index(fields=["is_admin", "-date_joined"]),
+        ]
 
     def save(self, *args, **kwargs):
         if self.is_admin:

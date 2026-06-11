@@ -24,6 +24,13 @@ class Order(models.Model):
         verbose_name = "订单"
         verbose_name_plural = "订单"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["buyer", "-created_at"]),
+            models.Index(fields=["seller", "-created_at"]),
+            models.Index(fields=["artwork", "-created_at"]),
+            models.Index(fields=["status", "-created_at"]),
+            models.Index(fields=["-created_at"]),
+        ]
 
     def __str__(self):
         return f"订单 #{self.id} - {self.artwork}"

@@ -1,8 +1,6 @@
-import base64
-import uuid
-
-from django.core.files.base import ContentFile
 from rest_framework import serializers
+
+from common.images import decode_base64_image
 
 from .models import Review
 
@@ -13,6 +11,7 @@ class ReviewSerializer(serializers.ModelSerializer):
     target_username = serializers.CharField(source="target_user.username", read_only=True)
     image_data = serializers.CharField(write_only=True, required=False, allow_blank=True)
     image_url = serializers.SerializerMethodField()
+    liked_by = serializers.SerializerMethodField()
     liked = serializers.SerializerMethodField()
 
     class Meta:
@@ -59,18 +58,29 @@ class ReviewSerializer(serializers.ModelSerializer):
 
     def get_liked(self, obj):
         request = self.context.get("request")
-        username = request.user.username if request and request.user.is_authenticated else ""
-        return username in (obj.liked_by or [])
+        user_id = request.user.id if request and request.user.is_authenticated else None
+        return bool(user_id and user_id in self._liked_user_ids(obj))
+
+    def get_liked_by(self, obj):
+        return self._liked_usernames(obj)
+
+    def _liked_user_cache(self, obj):
+        if not hasattr(obj, "_liked_user_cache"):
+            users = list(obj.liked_users.all())
+            obj._liked_user_cache = {
+                "ids": {user.id for user in users},
+                "usernames": [user.username for user in users],
+            }
+        return obj._liked_user_cache
+
+    def _liked_user_ids(self, obj):
+        return self._liked_user_cache(obj)["ids"]
+
+    def _liked_usernames(self, obj):
+        return self._liked_user_cache(obj)["usernames"]
 
     def _decode_image(self, image_data):
-        if not image_data:
-            return None
-        if ";base64," in image_data:
-            header, image_data = image_data.split(";base64,", 1)
-            ext = header.split("/")[-1] or "png"
-        else:
-            ext = "png"
-        return ContentFile(base64.b64decode(image_data), name=f"{uuid.uuid4().hex}.{ext}")
+        return decode_base64_image(image_data)
 
     def create(self, validated_data):
         image_data = validated_data.pop("image_data", "")
