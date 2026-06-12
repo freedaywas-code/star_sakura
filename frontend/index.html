@@ -141,6 +141,42 @@
     </div>
   </div>
 
+  <div class="artwork-detail hidden" id="commissionDetail">
+    <div class="commission-detail-panel">
+      <div class="artwork-detail-head">
+        <div>
+          <h3 id="commissionDetailTitle">委托详情</h3>
+          <span class="artwork-detail-tag" id="commissionDetailStatus">委托</span>
+        </div>
+        <button class="detail-close" type="button" id="commissionDetailClose" aria-label="关闭委托详情">×</button>
+      </div>
+      <div class="commission-detail-grid">
+        <div>
+          <span>类型</span>
+          <strong id="commissionDetailType"></strong>
+        </div>
+        <div>
+          <span>预算</span>
+          <strong id="commissionDetailBudget"></strong>
+        </div>
+        <div>
+          <span>发布者</span>
+          <strong id="commissionDetailRequester"></strong>
+        </div>
+        <div>
+          <span>接单者</span>
+          <strong id="commissionDetailArtist"></strong>
+        </div>
+        <div>
+          <span>发布时间</span>
+          <strong id="commissionDetailDate"></strong>
+        </div>
+      </div>
+      <div class="commission-detail-desc" id="commissionDetailDescription"></div>
+      <div class="commission-detail-actions" id="commissionDetailActions"></div>
+    </div>
+  </div>
+
   <nav id="navbar" class="">
     <div class="logo">
       <img src="star_sakura_text_logo.png" alt="星漫 Logo">
@@ -154,6 +190,10 @@
       <li><a href="#me" data-page="me">我</a></li>
     </ul>
     <div class="nav-account">
+      <form class="nav-search" id="navSearchForm" role="search">
+        <input id="navSearchInput" type="search" placeholder="搜索作品、委托、灵感" autocomplete="off">
+        <button type="submit" aria-label="搜索">搜索</button>
+      </form>
       <button class="nav-publish" type="button" id="publishNavBtn">发布</button>
       <button class="nav-user" type="button" id="navUserChip">
         <span class="nav-avatar" id="navUserAvatar">我</span>
@@ -237,6 +277,27 @@
     </div>
   </section>
 
+  <section class="section search-page page-section" id="search">
+    <div class="section-title fade-in visible">
+      <h2 id="searchPageTitle">搜索</h2>
+      <p id="searchPageHint">输入关键词，发现相关作品、委托和灵感</p>
+    </div>
+    <div class="search-shell fade-in visible">
+      <form class="search-hero-form" id="searchPageForm" role="search">
+        <input id="searchPageInput" type="search" placeholder="搜索作品、委托、灵感" autocomplete="off">
+        <button type="submit">搜索</button>
+      </form>
+      <div class="search-tabs" id="searchTabs">
+        <button class="active" type="button" data-search-type="all">全部</button>
+        <button type="button" data-search-type="artworks">作品</button>
+        <button type="button" data-search-type="commissions">委托</button>
+        <button type="button" data-search-type="inspirations">灵感</button>
+      </div>
+      <div class="search-summary" id="searchSummary">请输入关键词开始搜索</div>
+      <div class="search-results" id="searchResults"></div>
+    </div>
+  </section>
+
   <section class="section gallery page-section" id="gallery">
     <div class="section-title fade-in visible">
       <h2>角色画廊</h2>
@@ -309,8 +370,7 @@
             </div>
           </div>
           <div class="profile-actions">
-            <button type="button" class="toolbar-btn secondary" id="switchAccountBtn">切换账户</button>
-            <button type="button" class="toolbar-btn secondary" id="logoutBtn">退出登录</button>
+            <button type="button" class="toolbar-btn secondary" id="openSettingsFromProfileBtn">设置</button>
           </div>
         </div>
         <div class="profile-intro fade-in visible">
@@ -331,8 +391,11 @@
         <button class="profile-tab active" type="button" data-profile-tab="works">作品</button>
         <button class="profile-tab" type="button" data-profile-tab="inspirations">灵感</button>
         <button class="profile-tab" type="button" data-profile-tab="commissions">委托</button>
-        <button class="profile-tab" type="button" data-profile-tab="profile">资料</button>
-        <button class="profile-tab" type="button" data-profile-tab="settings">设置</button>
+        <button class="profile-tab" type="button" data-profile-tab="history">浏览历史</button>
+        <button class="profile-tab" type="button" data-profile-tab="likes">点赞</button>
+        <button class="profile-tab" type="button" data-profile-tab="favorites">收藏</button>
+        <button class="profile-tab" type="button" data-profile-tab="profile" hidden>资料</button>
+        <button class="profile-tab" type="button" data-profile-tab="settings" hidden>设置</button>
       </div>
 
       <div class="profile-tab-panel active" data-profile-panel="works">
@@ -353,6 +416,27 @@
         <div class="me-panel fade-in visible">
           <h3>我的作画委托</h3>
           <div class="mini-list" id="myCommissionList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="history">
+        <div class="me-panel fade-in visible">
+          <h3>浏览历史</h3>
+          <div class="mini-list" id="myHistoryList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="likes">
+        <div class="me-panel fade-in visible">
+          <h3>我的点赞</h3>
+          <div class="mini-list" id="myLikeList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="favorites">
+        <div class="me-panel fade-in visible">
+          <h3>我的收藏</h3>
+          <div class="mini-list" id="myFavoriteList"></div>
         </div>
       </div>
 
@@ -423,7 +507,16 @@
       <div class="profile-tab-panel" data-profile-panel="settings">
         <div class="me-panel fade-in visible">
           <h3>设置</h3>
-          <div class="settings-grid">
+          <div class="settings-entry" id="settingsEntry">
+            <button type="button" class="settings-entry-btn" id="openSettingsDetailBtn">进入设置</button>
+          </div>
+          <div class="settings-detail" id="settingsDetail" hidden>
+            <div class="settings-account-actions">
+              <button type="button" class="toolbar-btn secondary" id="switchAccountBtn">切换账户</button>
+              <button type="button" class="toolbar-btn secondary" id="logoutBtn">退出登录</button>
+            </div>
+            <div id="settingsProfileSlot"></div>
+            <div class="settings-grid">
             <div>
               <h4>通过旧密码修改</h4>
               <div class="form-group">
@@ -460,8 +553,9 @@
               </div>
               <button type="button" class="submit-btn" id="changeByEmailBtn">邮箱验证改密</button>
             </div>
+            </div>
+            <div class="auth-message" id="settingsMessage"></div>
           </div>
-          <div class="auth-message" id="settingsMessage"></div>
         </div>
       </div>
     </div>

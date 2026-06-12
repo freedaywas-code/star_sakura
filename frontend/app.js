@@ -10,6 +10,7 @@ const STORAGE = {
   commissions: 'starSakuraCommissions',
   inspirations: 'starSakuraInspirations',
   comments: 'starSakuraArtworkComments',
+  interactions: 'starSakuraInteractions',
   authTokens: 'starSakuraAuthTokens'
 };
 const GALLERY_ITEMS_PER_PAGE = 8;
@@ -362,6 +363,93 @@ function saveCardComments(cardId, items) {
   saveComments(comments);
 }
 
+function defaultInteractionState() {
+  return {
+    artwork: { views: {}, likes: {}, favorites: {}, comments: {}, history: [] },
+    inspiration: { views: {}, likes: {}, favorites: {}, comments: {}, history: [] },
+    users: {}
+  };
+}
+
+function getInteractions() {
+  const raw = JSON.parse(localStorage.getItem(STORAGE.interactions) || 'null');
+  const state = { ...defaultInteractionState(), ...(raw || {}) };
+  state.artwork = { ...defaultInteractionState().artwork, ...(state.artwork || {}) };
+  state.inspiration = { ...defaultInteractionState().inspiration, ...(state.inspiration || {}) };
+  state.users = state.users || {};
+  if (currentUser?.username && !state.users[currentUser.username]) {
+    state.users[currentUser.username] = { liked: [], favorites: [], history: [] };
+  }
+  return state;
+}
+
+function saveInteractions(state) {
+  localStorage.setItem(STORAGE.interactions, JSON.stringify(state));
+}
+
+function interactionKey(type, id) {
+  return `${type}:${String(id)}`;
+}
+
+function getUserInteractionBucket(state = getInteractions()) {
+  if (!currentUser?.username) return null;
+  state.users[currentUser.username] ||= { liked: [], favorites: [], history: [] };
+  return state.users[currentUser.username];
+}
+
+function getInteractionCounts(type, id) {
+  const state = getInteractions();
+  const bucket = state[type] || {};
+  return {
+    views: Number(bucket.views?.[id] || 0),
+    likes: Number(bucket.likes?.[id] || 0),
+    favorites: Number(bucket.favorites?.[id] || 0),
+    comments: Number(bucket.comments?.[id] || 0)
+  };
+}
+
+function userHasInteraction(kind, type, id) {
+  const bucket = getUserInteractionBucket();
+  return !!bucket?.[kind]?.includes(interactionKey(type, id));
+}
+
+function bumpInteraction(type, id, field, amount = 1) {
+  const state = getInteractions();
+  state[type][field][id] = Math.max(0, Number(state[type][field][id] || 0) + amount);
+  saveInteractions(state);
+}
+
+function addUserHistory(type, id) {
+  if (!currentUser?.username) return;
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state);
+  const key = interactionKey(type, id);
+  bucket.history = [key, ...bucket.history.filter(item => item !== key)].slice(0, 60);
+  saveInteractions(state);
+}
+
+function recordView(type, id) {
+  if (!id) return;
+  bumpInteraction(type, id, 'views', 1);
+  addUserHistory(type, id);
+  updateInteractionDisplays();
+  if (currentUser) renderMePage();
+}
+
+function toggleUserInteraction(kind, type, id) {
+  if (!requireLogin(kind === 'favorites' ? '请先登录后再收藏。' : '请先登录后再点赞。')) return;
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state);
+  const key = interactionKey(type, id);
+  const exists = bucket[kind].includes(key);
+  bucket[kind] = exists ? bucket[kind].filter(item => item !== key) : [key, ...bucket[kind]];
+  const counter = kind === 'favorites' ? 'favorites' : 'likes';
+  state[type][counter][id] = Math.max(0, Number(state[type][counter][id] || 0) + (exists ? -1 : 1));
+  saveInteractions(state);
+  updateInteractionDisplays();
+  renderMePage();
+}
+
 function setAuthMessage(message) {
   const messageEl = document.getElementById('authMessage');
   if (messageEl) messageEl.textContent = message;
@@ -462,6 +550,7 @@ function switchPage(pageId) {
   document.querySelectorAll('.nav-links a[data-page]').forEach(link => link.classList.toggle('active', link.dataset.page === pageId));
   if (pageId === 'me') renderMePage();
   if (pageId === 'contact') renderCommissionBoard();
+  if (pageId === 'search') renderSearchPage();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -554,6 +643,73 @@ function closeImagePreview() {
   document.getElementById('previewImage').removeAttribute('src');
 }
 
+updateCommentButtons = function() {
+  document.querySelectorAll('.character-card').forEach(card => {
+    const id = card.dataset.id;
+    const counts = getInteractionCounts('artwork', id);
+    const commentCount = Number(card.dataset.reviewsCount || getCardComments(id).length || counts.comments || 0);
+    const view = card.querySelector('[data-artwork-stat="views"]');
+    const like = card.querySelector('[data-artwork-stat="likes"]');
+    const comment = card.querySelector('[data-artwork-stat="comments"]');
+    const favorite = card.querySelector('[data-artwork-stat="favorites"]');
+    if (view) view.textContent = `浏览 ${counts.views}`;
+    if (like) {
+      like.textContent = `赞 ${counts.likes}`;
+      like.classList.toggle('active', userHasInteraction('liked', 'artwork', id));
+    }
+    if (comment) comment.textContent = `评 ${commentCount}`;
+    if (favorite) {
+      favorite.textContent = `藏 ${counts.favorites}`;
+      favorite.classList.toggle('active', userHasInteraction('favorites', 'artwork', id));
+    }
+  });
+};
+
+const baseNormalizeCommentButtons = normalizeCommentButtons;
+normalizeCommentButtons = function() {
+  baseNormalizeCommentButtons();
+  document.querySelectorAll('.character-card').forEach(card => {
+    const image = card.querySelector('.character-image');
+    if (image && !image.querySelector('.artwork-view-count')) {
+      const view = document.createElement('span');
+      view.className = 'artwork-view-count';
+      view.dataset.artworkStat = 'views';
+      image.appendChild(view);
+    }
+    let meta = card.querySelector('.character-meta');
+    if (!meta) return;
+    const oldComment = meta.querySelector('.comment-btn');
+    if (oldComment) oldComment.remove();
+    if (meta.querySelector('.interaction-strip')) return;
+    const strip = document.createElement('div');
+    strip.className = 'interaction-strip';
+    strip.innerHTML = `
+      <button type="button" data-artwork-action="like" data-artwork-stat="likes">赞 0</button>
+      <button type="button" data-artwork-action="comment" data-artwork-stat="comments">评 0</button>
+      <button type="button" data-artwork-action="favorite" data-artwork-stat="favorites">藏 0</button>
+    `;
+    strip.querySelector('[data-artwork-action="like"]').addEventListener('click', event => {
+      event.stopPropagation();
+      toggleUserInteraction('liked', 'artwork', card.dataset.id);
+    });
+    strip.querySelector('[data-artwork-action="comment"]').addEventListener('click', event => {
+      event.stopPropagation();
+      openArtworkDetail(card);
+    });
+    strip.querySelector('[data-artwork-action="favorite"]').addEventListener('click', event => {
+      event.stopPropagation();
+      toggleUserInteraction('favorites', 'artwork', card.dataset.id);
+    });
+    meta.appendChild(strip);
+  });
+  updateCommentButtons();
+};
+
+function updateInteractionDisplays() {
+  updateCommentButtons();
+  renderInspirationInteractionDisplays();
+}
+
 async function fetchArtworkReviews(cardId) {
   const data = await apiRequest(`/reviews/?artwork=${encodeURIComponent(cardId)}&page_size=100`);
   return apiList(data);
@@ -583,6 +739,9 @@ async function renderArtworkComments(cardId) {
   if (card) {
     document.getElementById('commentCardId').value = card.dataset.id;
     card.dataset.reviewsCount = String(items.length);
+    const state = getInteractions();
+    state.artwork.comments[card.dataset.id] = items.length;
+    saveInteractions(state);
     updateCommentButtons();
   }
   if (!items.length) {
@@ -649,6 +808,7 @@ function openArtworkDetail(cardOrId) {
   const card = typeof cardOrId === 'string' ? getGalleryCard(cardOrId) : cardOrId;
   const data = getCardData(card);
   if (!data) return;
+  recordView('artwork', data.id);
   document.getElementById('detailTitle').textContent = data.name;
   document.getElementById('detailTag').textContent = data.tag;
   document.getElementById('detailImage').src = data.imageSrc || '';
@@ -2058,6 +2218,10 @@ let activeInspirationId = '';
 let inspirationReplyTarget = '';
 let inspirationCommentSyncTimer = null;
 let inspirationCommentSyncBusy = false;
+let profileDataRefreshPromise = null;
+let profileArtworkDataLoaded = false;
+let profileCommissionDataLoaded = false;
+let profileInspirationDataLoaded = false;
 const expandedInspirationReplies = new Set();
 
 function normalizeProfile(profile = {}, username = '') {
@@ -2305,6 +2469,60 @@ function getInspirationById(id) {
   return getInspirations().find(item => String(item.id) === String(id));
 }
 
+const baseRenderInspirationsWithApi = renderInspirations;
+renderInspirations = async function() {
+  await baseRenderInspirationsWithApi();
+  const blogList = document.querySelector('#blog .blog-list');
+  if (!blogList) return;
+  const items = getInspirations();
+  blogList.innerHTML = items.length ? items.map(item => `
+    <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+      <h3>${escapeHTML(item.title)}</h3>
+      <p>${escapeHTML(item.content)}</p>
+      <div class="blog-tags">
+        <span class="blog-tag">${escapeHTML(item.tag || '灵感')}</span>
+      </div>
+      <div class="interaction-strip inspiration-strip">
+        <span data-inspiration-stat="views">浏览 0</span>
+        <button type="button" data-inspiration-action="like" data-inspiration-stat="likes">赞 0</button>
+        <span data-inspiration-stat="comments">评 0</span>
+        <button type="button" data-inspiration-action="favorite" data-inspiration-stat="favorites">藏 0</button>
+      </div>
+    </article>
+  `).join('') : '<div class="empty-state">暂无灵感日志</div>';
+  blogList.querySelectorAll('[data-inspiration-action]').forEach(button => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      const article = button.closest('[data-inspiration-id]');
+      const kind = button.dataset.inspirationAction === 'favorite' ? 'favorites' : 'liked';
+      toggleUserInteraction(kind, 'inspiration', article.dataset.inspirationId);
+    });
+  });
+  renderInspirationInteractionDisplays();
+};
+
+function renderInspirationInteractionDisplays() {
+  document.querySelectorAll('[data-inspiration-id]').forEach(article => {
+    const id = article.dataset.inspirationId;
+    const counts = getInteractionCounts('inspiration', id);
+    const view = article.querySelector('[data-inspiration-stat="views"]');
+    const like = article.querySelector('[data-inspiration-stat="likes"]');
+    const comment = article.querySelector('[data-inspiration-stat="comments"]');
+    const favorite = article.querySelector('[data-inspiration-stat="favorites"]');
+    if (view) view.textContent = `浏览 ${counts.views}`;
+    if (like) {
+      like.textContent = `赞 ${counts.likes}`;
+      like.classList.toggle('active', userHasInteraction('liked', 'inspiration', id));
+    }
+    if (comment) comment.textContent = `评 ${counts.comments}`;
+    if (favorite) {
+      favorite.textContent = `藏 ${counts.favorites}`;
+      favorite.classList.toggle('active', userHasInteraction('favorites', 'inspiration', id));
+    }
+  });
+}
+
 async function fetchInspirationComments(inspirationId) {
   const data = await apiRequest(`/inspirations/${encodeURIComponent(inspirationId)}/comments/`);
   inspirationCommentCache = apiList(data).map(inspirationCommentFromApi);
@@ -2358,6 +2576,12 @@ function renderInspirationCommentItem(item, isReply = false) {
 function renderInspirationComments() {
   const list = document.getElementById('inspirationCommentList');
   if (!list) return;
+  if (activeInspirationId) {
+    const state = getInteractions();
+    state.inspiration.comments[activeInspirationId] = inspirationCommentCache.length;
+    saveInteractions(state);
+    renderInspirationInteractionDisplays();
+  }
   const rootComments = inspirationCommentCache.filter(item => !item.parent);
   const repliesByParent = inspirationCommentCache.reduce((acc, item) => {
     if (!item.parent) return acc;
@@ -2415,6 +2639,7 @@ function stopInspirationCommentSync() {
 async function openInspirationDetail(inspirationId) {
   const item = getInspirationById(inspirationId);
   if (!item) return;
+  recordView('inspiration', inspirationId);
   activeInspirationId = String(inspirationId);
   inspirationReplyTarget = '';
   document.getElementById('inspirationDetailTitle').textContent = item.title;
@@ -2432,6 +2657,9 @@ async function openInspirationDetail(inspirationId) {
     console.warn('Inspiration comments API unavailable:', error);
     inspirationCommentCache = [];
   }
+  const state = getInteractions();
+  state.inspiration.comments[activeInspirationId] = inspirationCommentCache.length;
+  saveInteractions(state);
   renderInspirationComments();
   startInspirationCommentSync();
 }
@@ -2563,11 +2791,123 @@ async function ensureInspirationsLoaded() {
   }
 }
 
+function resolveInteractionItem(key) {
+  const [type, id] = String(key).split(':');
+  if (type === 'artwork') {
+    const card = getCardData(getGalleryCard(id));
+    if (!card) return null;
+    return { type, id, title: card.name, subtitle: card.tag, imageSrc: card.imageSrc || '', meta: '作品' };
+  }
+  if (type === 'inspiration') {
+    const item = getInspirationById(id);
+    if (!item) return null;
+    return { type, id, title: item.title, subtitle: item.content, imageSrc: '', meta: `灵感 · ${item.tag || ''}` };
+  }
+  return null;
+}
+
+function renderInteractionMiniList(targetId, keys, emptyText) {
+  const list = document.getElementById(targetId);
+  if (!list) return;
+  const items = (keys || []).map(resolveInteractionItem).filter(Boolean);
+  list.innerHTML = items.length ? items.map(item => `
+    <div class="mini-item interaction-mini" data-profile-interaction-type="${escapeHTML(item.type)}" data-profile-interaction-id="${escapeHTML(item.id)}">
+      <div class="mini-thumb">${item.imageSrc ? `<img src="${escapeHTML(item.imageSrc)}" alt="${escapeHTML(item.title)}">` : `<span>${escapeHTML(item.meta.slice(0, 2))}</span>`}</div>
+      <div class="mini-body">
+        <strong>${escapeHTML(item.title)}</strong>
+        <span>${escapeHTML(item.meta)} · ${escapeHTML(item.subtitle || '')}</span>
+      </div>
+    </div>
+  `).join('') : `<div class="empty-state">${escapeHTML(emptyText)}</div>`;
+}
+
+function refreshProfileInteractionLists() {
+  if (!currentUser) return;
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state);
+  renderInteractionMiniList('myHistoryList', bucket?.history || [], '还没有浏览记录。');
+  renderInteractionMiniList('myLikeList', bucket?.liked || [], '还没有点赞内容。');
+  renderInteractionMiniList('myFavoriteList', bucket?.favorites || [], '还没有收藏内容。');
+}
+
+function insertMiniStats(actions, counts, comments) {
+  if (!actions) return;
+  actions.querySelectorAll('.mini-stat').forEach(item => item.remove());
+  const html = `
+    <span class="mini-stat">浏览 ${counts.views}</span>
+    <span class="mini-stat">赞 ${counts.likes}</span>
+    <span class="mini-stat">评 ${comments}</span>
+    <span class="mini-stat">藏 ${counts.favorites}</span>
+  `;
+  actions.insertAdjacentHTML('afterbegin', html);
+}
+
+function refreshProfileContentStats() {
+  document.querySelectorAll('#myArtworkList .artwork-mini').forEach(item => {
+    const editButton = item.querySelector('[onclick^="editMyArtwork"]');
+    const match = editButton?.getAttribute('onclick')?.match(/editMyArtwork\('([^']+)'\)/);
+    if (!match) return;
+    const id = match[1];
+    const card = serializeGallery().find(entry => String(entry.id) === String(id));
+    const counts = getInteractionCounts('artwork', id);
+    insertMiniStats(item.querySelector('.mini-actions'), counts, Number(card?.reviewsCount || counts.comments || 0));
+  });
+  document.querySelectorAll('#myInspirationList .mini-item').forEach(item => {
+    const viewButton = item.querySelector('[onclick^="openInspirationDetail"]');
+    const match = viewButton?.getAttribute('onclick')?.match(/openInspirationDetail\('([^']+)'\)/);
+    if (!match) return;
+    const id = match[1];
+    const counts = getInteractionCounts('inspiration', id);
+    insertMiniStats(item.querySelector('.mini-actions'), counts, counts.comments);
+  });
+}
+
 const inspirationAwareRenderMePage = renderMePage;
 renderMePage = function() {
   inspirationAwareRenderMePage();
   refreshMyInspirationList();
-  ensureInspirationsLoaded().then(() => refreshMyInspirationList());
+  refreshProfileInteractionLists();
+  refreshProfileContentStats();
+  ensureInspirationsLoaded().then(() => {
+    refreshMyInspirationList();
+    refreshProfileInteractionLists();
+    refreshProfileContentStats();
+  });
+};
+
+async function ensureProfileDataLoaded() {
+  if (!currentUser) return;
+  if (profileDataRefreshPromise) return profileDataRefreshPromise;
+  profileDataRefreshPromise = Promise.allSettled([
+    profileArtworkDataLoaded
+      ? Promise.resolve()
+      : loadGalleryFromApi().then(() => { profileArtworkDataLoaded = true; }),
+    profileCommissionDataLoaded
+      ? Promise.resolve()
+      : loadCommissionsFromApi().then(() => { profileCommissionDataLoaded = true; }),
+    profileInspirationDataLoaded
+      ? Promise.resolve()
+      : loadInspirationsFromApi().then(() => { profileInspirationDataLoaded = true; })
+  ]).then(() => {
+    refreshMyCommissionList(
+      getCommissions().filter(item => item.requester === currentUser.username || item.artist === currentUser.username)
+    );
+    refreshMyInspirationList();
+    inspirationAwareRenderMePage();
+    refreshProfileInteractionLists();
+    refreshProfileContentStats();
+  }).catch(error => {
+    console.warn('Profile data refresh failed:', error);
+  }).finally(() => {
+    profileDataRefreshPromise = null;
+  });
+  return profileDataRefreshPromise;
+}
+
+const dataAwareRenderMePage = renderMePage;
+renderMePage = function() {
+  dataAwareRenderMePage();
+  ensureProfileDataLoaded();
 };
 
 function editMyInspiration(inspirationId) {
@@ -2631,6 +2971,272 @@ savePublishForm = async function() {
   }
 };
 
+const searchState = {
+  query: '',
+  filter: 'all',
+  loading: false,
+  results: {
+    artworks: [],
+    commissions: [],
+    inspirations: []
+  }
+};
+
+function normalizeSearchValue(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function textMatchesKeyword(values, keyword) {
+  const needle = normalizeSearchValue(keyword);
+  return values.some(value => normalizeSearchValue(value).includes(needle));
+}
+
+function mergeById(primary, secondary) {
+  const seen = new Set();
+  return [...primary, ...secondary].filter(item => {
+    const key = String(item.id || item.title || item.name || Math.random());
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function localArtworkSearch(query) {
+  return serializeGallery().filter(item => textMatchesKeyword([item.name, item.tag, item.owner], query));
+}
+
+function localCommissionSearch(query) {
+  if (!currentUser) return [];
+  return getCommissions().filter(item => textMatchesKeyword([
+    item.title,
+    item.typeLabel,
+    item.description,
+    item.budget,
+    item.requester,
+    item.artist,
+    getCommissionStatusLabel(item.status)
+  ], query));
+}
+
+function localInspirationSearch(query) {
+  return getInspirations().filter(item => textMatchesKeyword([item.title, item.tag, item.content, item.owner], query));
+}
+
+async function fetchSearchResults(query) {
+  const encoded = encodeURIComponent(query);
+  const [artworks, commissions, inspirations] = await Promise.allSettled([
+    apiRequest(`/artworks/?search=${encoded}&page_size=50&ordering=-created_at`).then(data => apiList(data).map(artworkToCardData)),
+    currentUser
+      ? apiRequest(`/custom/?search=${encoded}&page_size=50&ordering=-created_at`).then(data => apiList(data).map(commissionFromApi))
+      : Promise.resolve([]),
+    apiRequest(`/inspirations/?search=${encoded}&page_size=50&ordering=-created_at`).then(data => apiList(data).map(inspirationFromApi))
+  ]);
+  return {
+    artworks: mergeById(artworks.status === 'fulfilled' ? artworks.value : [], localArtworkSearch(query)),
+    commissions: mergeById(commissions.status === 'fulfilled' ? commissions.value : [], localCommissionSearch(query)),
+    inspirations: mergeById(inspirations.status === 'fulfilled' ? inspirations.value : [], localInspirationSearch(query))
+  };
+}
+
+function searchResultCount() {
+  return searchState.results.artworks.length
+    + searchState.results.commissions.length
+    + searchState.results.inspirations.length;
+}
+
+function getVisibleSearchResults() {
+  if (searchState.filter === 'all') {
+    return [
+      ...searchState.results.artworks.map(item => ({ type: 'artworks', item })),
+      ...searchState.results.commissions.map(item => ({ type: 'commissions', item })),
+      ...searchState.results.inspirations.map(item => ({ type: 'inspirations', item }))
+    ];
+  }
+  return searchState.results[searchState.filter].map(item => ({ type: searchState.filter, item }));
+}
+
+function renderSearchCard(result) {
+  const { type, item } = result;
+  if (type === 'artworks') {
+    const imageHtml = item.imageSrc ? `<img src="${escapeHTML(item.imageSrc)}" alt="${escapeHTML(item.name)}">` : '作品';
+    return `<article class="search-result-card" data-search-result-type="artworks" data-search-result-id="${escapeHTML(item.id)}">
+      <div class="search-result-media">${imageHtml}</div>
+      <div class="search-result-body">
+        <div class="search-result-head">
+          <span class="search-result-type">作品</span>
+          <h3>${escapeHTML(item.name)}</h3>
+        </div>
+        <p class="search-result-desc">${escapeHTML(item.name)} 是由 @${escapeHTML(item.owner || 'admin')} 发布的作品。</p>
+        <div class="search-result-meta">
+          <span>作者 @${escapeHTML(item.owner || 'admin')}</span>
+          <span>评价 ${Number(item.reviewsCount || 0)} 条</span>
+        </div>
+        <div class="search-result-tags"><span>${escapeHTML(item.tag || '原创作品')}</span></div>
+      </div>
+    </article>`;
+  }
+  if (type === 'commissions') {
+    return `<article class="search-result-card" data-search-result-type="commissions" data-search-result-id="${escapeHTML(item.id)}">
+      <div class="search-result-media">委托</div>
+      <div class="search-result-body">
+        <div class="search-result-head">
+          <span class="search-result-type">委托</span>
+          <h3>${escapeHTML(item.title)}</h3>
+        </div>
+        <p class="search-result-desc">${escapeHTML(item.description || '暂无需求说明')}</p>
+        <div class="search-result-meta">
+          <span>发布者 @${escapeHTML(item.requester || 'admin')}</span>
+          <span>接单者 ${escapeHTML(item.artist || '暂未接单')}</span>
+          <span>${escapeHTML(item.createdAt || '')}</span>
+        </div>
+        <div class="search-result-tags">
+          <span>${escapeHTML(item.typeLabel || '委托')}</span>
+          <span>${escapeHTML(item.budget || '可商议')}</span>
+          <span>${getCommissionStatusLabel(item.status)}</span>
+        </div>
+      </div>
+    </article>`;
+  }
+  return `<article class="search-result-card" data-search-result-type="inspirations" data-search-result-id="${escapeHTML(item.id)}">
+    <div class="search-result-media">灵感</div>
+    <div class="search-result-body">
+      <div class="search-result-head">
+        <span class="search-result-type">灵感</span>
+        <h3>${escapeHTML(item.title)}</h3>
+      </div>
+      <p class="search-result-desc">${escapeHTML(item.content || '暂无内容')}</p>
+      <div class="search-result-meta">
+        <span>作者 @${escapeHTML(item.owner || 'admin')}</span>
+        <span>${escapeHTML(getInspirationDisplayTime(item) || '')}</span>
+      </div>
+      <div class="search-result-tags"><span>${escapeHTML(item.tag || '灵感')}</span></div>
+    </div>
+  </article>`;
+}
+
+function renderSearchPage() {
+  const title = document.getElementById('searchPageTitle');
+  const hint = document.getElementById('searchPageHint');
+  const summary = document.getElementById('searchSummary');
+  const results = document.getElementById('searchResults');
+  const navInput = document.getElementById('navSearchInput');
+  const pageInput = document.getElementById('searchPageInput');
+  if (navInput && navInput.value !== searchState.query) navInput.value = searchState.query;
+  if (pageInput && pageInput.value !== searchState.query) pageInput.value = searchState.query;
+  document.querySelectorAll('[data-search-type]').forEach(button => {
+    button.classList.toggle('active', button.dataset.searchType === searchState.filter);
+  });
+  if (!summary || !results) return;
+  if (!searchState.query) {
+    if (title) title.textContent = '搜索';
+    if (hint) hint.textContent = '输入关键词，发现相关作品、委托和灵感';
+    summary.textContent = '请输入关键词开始搜索';
+    results.innerHTML = '<div class="search-empty">在上方输入关键词，点击搜索后查看结果。</div>';
+    return;
+  }
+  if (title) title.textContent = `搜索：${searchState.query}`;
+  if (hint) hint.textContent = '相关内容会按作品、委托和灵感聚合展示';
+  if (searchState.loading) {
+    summary.textContent = '正在搜索...';
+    results.innerHTML = '<div class="search-empty">正在连接数据源，请稍候。</div>';
+    return;
+  }
+  const visibleResults = getVisibleSearchResults();
+  summary.textContent = `找到 ${searchResultCount()} 条相关内容`;
+  results.innerHTML = visibleResults.length
+    ? visibleResults.map(renderSearchCard).join('')
+    : '<div class="search-empty">没有找到相关内容，换个关键词试试。</div>';
+}
+
+async function performSearch(query) {
+  const keyword = String(query || '').trim();
+  searchState.query = keyword;
+  searchState.filter = 'all';
+  if (!keyword) {
+    switchPage('search');
+    renderSearchPage();
+    return;
+  }
+  switchPage('search');
+  searchState.loading = true;
+  renderSearchPage();
+  try {
+    searchState.results = await fetchSearchResults(keyword);
+  } catch (error) {
+    console.warn('Search failed:', error);
+    searchState.results = {
+      artworks: localArtworkSearch(keyword),
+      commissions: localCommissionSearch(keyword),
+      inspirations: localInspirationSearch(keyword)
+    };
+  } finally {
+    searchState.loading = false;
+    renderSearchPage();
+  }
+}
+
+function focusGallerySearchResult(artworkId) {
+  switchPage('gallery');
+  const cards = getGalleryCards();
+  const index = cards.findIndex(card => String(card.dataset.id) === String(artworkId));
+  if (index >= 0) {
+    galleryCurrentPage = Math.floor(index / GALLERY_ITEMS_PER_PAGE) + 1;
+    renderGalleryPagination();
+    window.setTimeout(() => {
+      const card = getGalleryCard(artworkId);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }
+}
+
+function openCommissionDetail(commissionId) {
+  const item = getCommissions().find(entry => String(entry.id) === String(commissionId))
+    || searchState.results.commissions.find(entry => String(entry.id) === String(commissionId));
+  if (!item) return;
+  document.getElementById('commissionDetailTitle').textContent = item.title || '委托详情';
+  document.getElementById('commissionDetailStatus').textContent = getCommissionStatusLabel(item.status);
+  document.getElementById('commissionDetailType').textContent = item.typeLabel || '委托';
+  document.getElementById('commissionDetailBudget').textContent = item.budget || '可商议';
+  document.getElementById('commissionDetailRequester').textContent = item.requester || 'admin';
+  document.getElementById('commissionDetailArtist').textContent = item.artist || '暂未接单';
+  document.getElementById('commissionDetailDate').textContent = item.createdAt || '';
+  document.getElementById('commissionDetailDescription').textContent = item.description || '暂无需求说明';
+  const actions = document.getElementById('commissionDetailActions');
+  if (actions) {
+    const canAccept = canAcceptCommission(item);
+    actions.innerHTML = canAccept
+      ? `<button type="button" class="commission-btn" onclick="acceptCommission('${escapeHTML(item.id)}'); closeCommissionDetail();">接受委托</button>`
+      : `<button type="button" class="commission-btn secondary" disabled>${item.artist ? `接单者：${escapeHTML(item.artist)}` : '等待接单'}</button>`;
+  }
+  document.getElementById('commissionDetail').classList.remove('hidden');
+}
+
+function closeCommissionDetail() {
+  document.getElementById('commissionDetail')?.classList.add('hidden');
+}
+
+function openSearchResult(type, id) {
+  if (type === 'artworks') {
+    const card = getGalleryCard(id);
+    if (card) openArtworkDetail(card);
+    else focusGallerySearchResult(id);
+    return;
+  }
+  if (type === 'commissions') {
+    if (!currentUser) {
+      openAuth('login', '请先登录后再查看委托内容。');
+      return;
+    }
+    openCommissionDetail(id);
+    return;
+  }
+  if (type === 'inspirations') {
+    const item = getInspirationById(id);
+    if (item) openInspirationDetail(id);
+    else switchPage('blog');
+  }
+}
+
 window.addEventListener('scroll', () => {
   if (window.scrollY > 50) navbar.classList.add('scrolled');
   else navbar.classList.remove('scrolled');
@@ -2666,6 +3272,39 @@ document.getElementById('navUserChip').addEventListener('click', () => {
   switchPage('me');
 });
 
+document.getElementById('navSearchForm')?.addEventListener('submit', event => {
+  event.preventDefault();
+  performSearch(document.getElementById('navSearchInput')?.value || '');
+});
+
+document.getElementById('searchPageForm')?.addEventListener('submit', event => {
+  event.preventDefault();
+  performSearch(document.getElementById('searchPageInput')?.value || '');
+});
+
+document.getElementById('searchTabs')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-search-type]');
+  if (!button) return;
+  if (button.dataset.searchType === 'commissions' && !currentUser) {
+    openAuth('login', '请先登录后再搜索委托内容。');
+    return;
+  }
+  searchState.filter = button.dataset.searchType;
+  renderSearchPage();
+});
+
+document.getElementById('searchResults')?.addEventListener('click', event => {
+  const card = event.target.closest('[data-search-result-type]');
+  if (!card) return;
+  openSearchResult(card.dataset.searchResultType, card.dataset.searchResultId);
+});
+
+document.getElementById('commissionDetailClose')?.addEventListener('click', closeCommissionDetail);
+
+document.getElementById('commissionDetail')?.addEventListener('click', event => {
+  if (event.target.id === 'commissionDetail') closeCommissionDetail();
+});
+
 document.getElementById('publishImageBox').addEventListener('click', () => {
   document.getElementById('publishImageInput').click();
 });
@@ -2698,6 +3337,34 @@ document.querySelectorAll('.auth-tab').forEach(tab => {
   tab.addEventListener('click', () => setAuthMode(tab.dataset.authMode));
 });
 
+function setupSettingsPanel() {
+  const profilePanel = document.querySelector('[data-profile-panel="profile"]');
+  const profileGrid = profilePanel?.querySelector('.profile-grid');
+  const slot = document.getElementById('settingsProfileSlot');
+  if (profileGrid && slot && !slot.contains(profileGrid)) {
+    slot.appendChild(profileGrid);
+    profilePanel.hidden = true;
+  }
+  document.getElementById('openSettingsDetailBtn')?.addEventListener('click', () => {
+    openSettingsPanel();
+  });
+  document.getElementById('openSettingsFromProfileBtn')?.addEventListener('click', openSettingsPanel);
+}
+
+setupSettingsPanel();
+
+function openSettingsPanel() {
+  document.querySelectorAll('.profile-tab').forEach(item => item.classList.toggle('active', item.dataset.profileTab === 'settings'));
+  document.querySelectorAll('.profile-tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.dataset.profilePanel === 'settings');
+  });
+  const entry = document.getElementById('settingsEntry');
+  const detail = document.getElementById('settingsDetail');
+  if (entry) entry.hidden = true;
+  if (detail) detail.hidden = false;
+  document.querySelector('[data-profile-panel="settings"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 document.querySelectorAll('.profile-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const target = tab.dataset.profileTab;
@@ -2706,6 +3373,15 @@ document.querySelectorAll('.profile-tab').forEach(tab => {
       panel.classList.toggle('active', panel.dataset.profilePanel === target);
     });
   });
+});
+
+document.querySelector('.profile-page')?.addEventListener('click', event => {
+  const item = event.target.closest('[data-profile-interaction-type]');
+  if (!item) return;
+  const type = item.dataset.profileInteractionType;
+  const id = item.dataset.profileInteractionId;
+  if (type === 'artwork') openArtworkDetail(id);
+  if (type === 'inspiration') openInspirationDetail(id);
 });
 
 document.getElementById('loginForm').addEventListener('submit', event => {

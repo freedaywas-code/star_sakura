@@ -35,7 +35,7 @@ class CachedPublicReadMixin:
         return response
 
     def list(self, request, *args, **kwargs):
-        return self._cached_response(lambda: super().list(request, *args, **kwargs))
+        return self._cached_response(lambda: super(CachedPublicReadMixin, self).list(request, *args, **kwargs))
 
     def retrieve(self, request, *args, **kwargs):
-        return self._cached_response(lambda: super().retrieve(request, *args, **kwargs))
+        return self._cached_response(lambda: super(CachedPublicReadMixin, self).retrieve(request, *args, **kwargs))
