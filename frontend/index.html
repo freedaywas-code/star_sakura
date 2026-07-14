@@ -86,6 +86,7 @@
           <div>
             <h3 id="detailTitle">作品详情</h3>
             <span class="artwork-detail-tag" id="detailTag">原创作品</span>
+            <button class="user-profile-link detail-owner-link" type="button" id="detailOwner" hidden></button>
           </div>
           <button class="detail-close" type="button" id="detailClose" aria-label="关闭详情">×</button>
         </div>
@@ -115,7 +116,7 @@
           <button class="detail-close" type="button" id="inspirationDetailClose" aria-label="关闭灵感详情">×</button>
         </div>
         <div class="inspiration-detail-meta">
-          <span id="inspirationDetailOwner"></span>
+          <button class="user-profile-link" type="button" id="inspirationDetailOwner"></button>
           <span id="inspirationDetailDate"></span>
         </div>
         <div class="inspiration-detail-content" id="inspirationDetailContent"></div>
@@ -167,6 +168,10 @@
           <span>接单者</span>
           <strong id="commissionDetailArtist"></strong>
         </div>
+        <div id="commissionDetailAgreedPriceRow" hidden>
+          <span id="commissionDetailAgreedPriceLabel"></span>
+          <strong id="commissionDetailAgreedPrice"></strong>
+        </div>
         <div>
           <span>发布时间</span>
           <strong id="commissionDetailDate"></strong>
@@ -174,6 +179,39 @@
       </div>
       <div class="commission-detail-desc" id="commissionDetailDescription"></div>
       <div class="commission-detail-actions" id="commissionDetailActions"></div>
+      <section class="commission-workspace" id="commissionWorkspace">
+        <div class="commission-workspace-head">
+          <div>
+            <h4 id="commissionWorkspaceTitle"></h4>
+            <p id="commissionWorkspaceHint">...</p>
+          </div>
+          <button class="commission-btn secondary compact" type="button" id="commissionDetailRefresh">Refresh</button>
+        </div>
+        <div class="commission-workspace-grid">
+          <section class="commission-market-panel" id="commissionBidPanel">
+            <div class="commission-market-title">
+              <div>
+                <span class="commission-market-kicker" id="commissionBidKicker"></span>
+                <h5 id="commissionBidTitle"></h5>
+              </div>
+              <span class="commission-count-badge" id="commissionDetailBidCount">0</span>
+            </div>
+            <div id="commissionBidComposer"></div>
+            <div class="commission-market-list" id="commissionDetailBidList"></div>
+          </section>
+          <section class="commission-market-panel" id="commissionInvitationPanel">
+            <div class="commission-market-title">
+              <div>
+                <span class="commission-market-kicker" id="commissionInvitationKicker"></span>
+                <h5 id="commissionInvitationTitle"></h5>
+              </div>
+              <span class="commission-count-badge" id="commissionDetailInvitationCount">0</span>
+            </div>
+            <div id="commissionInviteComposer"></div>
+            <div class="commission-market-list" id="commissionDetailInvitationList"></div>
+          </section>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -195,6 +233,10 @@
         <button type="submit" aria-label="搜索">搜索</button>
       </form>
       <button class="nav-publish" type="button" id="publishNavBtn">发布</button>
+      <button class="nav-message" type="button" id="messageNavBtn" aria-label="私信">
+        <span aria-hidden="true">私信</span>
+        <span class="nav-unread-badge" id="messageUnreadBadge" hidden>0</span>
+      </button>
       <button class="nav-user" type="button" id="navUserChip">
         <span class="nav-avatar" id="navUserAvatar">我</span>
         <span class="nav-name" id="navUserName">未登录</span>
@@ -304,7 +346,7 @@
       <p>每一个角色都有属于自己的故事</p>
     </div>
     <div class="gallery-grid" id="galleryGrid"></div>
-    <div class="gallery-pagination" id="galleryPagination" aria-label="作品分页"></div>
+    <div class="gallery-pagination" id="galleryPagination" aria-label="作品加载状态"></div>
   </section>
 
   <section class="section contact page-section" id="contact">
@@ -367,6 +409,8 @@
               <div><strong id="profileArtworkCount">0</strong><span>作品</span></div>
               <div><strong id="profileCommissionCount">0</strong><span>委托</span></div>
               <div><strong id="profileCreativeYears">0</strong><span>创作年限</span></div>
+              <button class="profile-stat-button" type="button" data-social-list="followers"><strong id="profileFollowerCount">0</strong><span>粉丝</span></button>
+              <button class="profile-stat-button" type="button" data-social-list="following"><strong id="profileFollowingCount">0</strong><span>关注</span></button>
             </div>
           </div>
           <div class="profile-actions">
@@ -394,6 +438,8 @@
         <button class="profile-tab" type="button" data-profile-tab="history">浏览历史</button>
         <button class="profile-tab" type="button" data-profile-tab="likes">点赞</button>
         <button class="profile-tab" type="button" data-profile-tab="favorites">收藏</button>
+        <button class="profile-tab" type="button" data-profile-tab="followers">粉丝</button>
+        <button class="profile-tab" type="button" data-profile-tab="following">关注</button>
         <button class="profile-tab" type="button" data-profile-tab="profile" hidden>资料</button>
         <button class="profile-tab" type="button" data-profile-tab="settings" hidden>设置</button>
       </div>
@@ -437,6 +483,26 @@
         <div class="me-panel fade-in visible">
           <h3>我的收藏</h3>
           <div class="mini-list" id="myFavoriteList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="followers">
+        <div class="me-panel fade-in visible">
+          <div class="social-list-head">
+            <h3>我的粉丝</h3>
+            <button class="toolbar-btn secondary compact" type="button" data-refresh-social-list="followers">刷新</button>
+          </div>
+          <div class="social-user-list" id="myFollowerList"><div class="empty-state">正在加载粉丝...</div></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="following">
+        <div class="me-panel fade-in visible">
+          <div class="social-list-head">
+            <h3>我关注的人</h3>
+            <button class="toolbar-btn secondary compact" type="button" data-refresh-social-list="following">刷新</button>
+          </div>
+          <div class="social-user-list" id="myFollowingList"><div class="empty-state">正在加载关注列表...</div></div>
         </div>
       </div>
 
@@ -498,6 +564,11 @@
                 </div>
                 <div class="skill-editor-list" id="profileSkillEditorList"></div>
               </div>
+              <div class="form-group">
+                <label for="profileHomeTags">首页推荐标签</label>
+                <input id="profileHomeTags" type="text" placeholder="例如：原创角色、魔法少女、赛博朋克">
+                <div class="skill-editor-list recommendation-tag-list" id="profileHomeTagList"></div>
+              </div>
               <button type="submit" class="submit-btn">保存资料</button>
             </form>
           </div>
@@ -558,6 +629,94 @@
           </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section class="section public-profile-page page-section" id="userProfile">
+    <div class="public-profile-shell">
+      <div class="profile-hero" id="publicProfileHero">
+        <div class="profile-cover"></div>
+        <div class="profile-head">
+          <div class="profile-avatar" id="publicProfileAvatar">画</div>
+          <div class="profile-main">
+            <h2 id="publicProfileDisplayName">正在加载...</h2>
+            <p class="profile-handle" id="publicProfileHandle">@user</p>
+            <p class="profile-bio" id="publicProfileBio">正在读取公开资料</p>
+            <div class="profile-stats">
+              <div><strong id="publicProfileArtworkCount">0</strong><span>作品</span></div>
+              <div><strong id="publicProfileFollowerCount">0</strong><span>粉丝</span></div>
+              <div><strong id="publicProfileFollowingCount">0</strong><span>关注</span></div>
+              <div><strong id="publicProfileCreativeYears">0</strong><span>创作年限</span></div>
+            </div>
+          </div>
+          <div class="profile-actions public-profile-actions">
+            <button type="button" class="toolbar-btn" id="publicProfileFollowBtn">关注</button>
+            <button type="button" class="toolbar-btn secondary" id="publicProfileMessageBtn">私信</button>
+          </div>
+        </div>
+        <div class="profile-intro">
+          <div>
+            <span class="intro-kicker">简介</span>
+            <p id="publicProfileIntro">这个人还没有填写简介。</p>
+            <p id="publicProfilePhilosophy">暂未填写创作理念。</p>
+          </div>
+          <div>
+            <span class="intro-kicker">技能</span>
+            <div class="tools-list intro-tools" id="publicProfileSkillList"></div>
+          </div>
+        </div>
+      </div>
+      <div class="me-panel public-profile-works">
+        <div class="social-list-head">
+          <h3>TA 的作品</h3>
+          <button type="button" class="toolbar-btn secondary compact" id="publicProfileBackBtn">返回</button>
+        </div>
+        <div class="public-work-grid" id="publicProfileArtworkList"><div class="empty-state">正在加载作品...</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section messages-page page-section" id="messages">
+    <div class="section-title fade-in visible">
+      <h2>私信</h2>
+      <p>和互相关注的创作者自由交流；尚未互关时，每一方最多发送 3 条消息。</p>
+    </div>
+    <div class="message-shell fade-in visible">
+      <aside class="conversation-pane">
+        <div class="message-pane-head">
+          <div>
+            <span class="message-kicker">Conversations</span>
+            <h3>会话</h3>
+          </div>
+          <button class="message-icon-btn" type="button" id="refreshConversationsBtn" aria-label="刷新会话">↻</button>
+        </div>
+        <div class="conversation-list" id="conversationList"><div class="message-empty">正在加载会话...</div></div>
+      </aside>
+      <section class="chat-pane" id="chatPane">
+        <div class="message-empty chat-welcome" id="chatWelcome">
+          <strong>选择一位创作者开始聊天</strong>
+          <span>你也可以从对方的个人主页发起私信。</span>
+        </div>
+        <div class="chat-active" id="chatActive" hidden>
+          <header class="chat-head">
+            <button class="message-icon-btn chat-back-btn" type="button" id="chatBackBtn" aria-label="返回会话">←</button>
+            <button class="chat-person user-profile-link" type="button" id="chatPersonBtn">
+              <span class="message-avatar" id="chatAvatar">画</span>
+              <span><strong id="chatDisplayName">创作者</strong><small id="chatUsername">@user</small></span>
+            </button>
+            <span class="message-limit-badge" id="messageLimitBadge">剩余 3 条</span>
+          </header>
+          <div class="message-history" id="messageHistory"></div>
+          <button class="load-message-history" type="button" id="loadOlderMessagesBtn" hidden>加载更早消息</button>
+          <form class="message-composer" id="messageComposer">
+            <textarea id="messageBody" maxlength="2000" placeholder="输入私信内容，Enter 发送，Shift + Enter 换行"></textarea>
+            <div class="message-composer-foot">
+              <span id="messageComposerHint">未互关时，你最多可以发送 3 条消息。</span>
+              <button class="submit-btn" type="submit" id="sendMessageBtn">发送</button>
+            </div>
+          </form>
+        </div>
+      </section>
     </div>
   </section>
 
