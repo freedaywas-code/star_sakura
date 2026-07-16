@@ -21,7 +21,10 @@ def api_home(request):
                     "custom": "/api/custom/",
                     "reviews": "/api/reviews/",
                     "inspirations": "/api/inspirations/",
+<<<<<<< HEAD
                     "recommend": "/api/recommend/",
+=======
+>>>>>>> origin/group_code
                 },
             },
         },
@@ -49,7 +52,10 @@ urlpatterns = [
     path("api/custom/", include("apps.custom.urls")),
     path("api/reviews/", include("apps.reviews.urls")),
     path("api/inspirations/", include("apps.inspirations.urls")),
+<<<<<<< HEAD
     path("api/recommend/", include("apps.recommendations.urls")),
+=======
+>>>>>>> origin/group_code
 ]
 
 if settings.DEBUG:

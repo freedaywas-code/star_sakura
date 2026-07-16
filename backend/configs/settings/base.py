@@ -1,9 +1,12 @@
 import os
 from pathlib import Path
 
+<<<<<<< HEAD
 from dotenv import load_dotenv
 load_dotenv()
 
+=======
+>>>>>>> origin/group_code
 
 def env_bool(name, default=False):
     value = os.getenv(name)
@@ -49,7 +52,10 @@ INSTALLED_APPS = [
     "apps.custom",
     "apps.reviews",
     "apps.inspirations",
+<<<<<<< HEAD
     "apps.recommendations",
+=======
+>>>>>>> origin/group_code
 ]
 
 MIDDLEWARE = [

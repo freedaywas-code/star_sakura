@@ -50,6 +50,13 @@ sh start.sh
 - 登录界面支持“登录 / 注册”切换，注册需要用户名、邮箱、邮箱密码、用户密码和确认密码。
 - 画作图片点击会放大预览；编辑/删除按钮只对创作者或管理员显示。
 - “我”页面可以编辑性别、生日、个性签名，查看自己发布的画作和提交的作画委托，并支持切换账号。
+<<<<<<< HEAD
+=======
+- “我”页面可以查看粉丝和关注列表；作品作者、评论者及委托参与者均可进入公开个人主页并发起私信。
+- 未互关时，每位用户向同一对象最多发送 3 条私信（双方方向分别计数）；互相关注后不限条数，取消互关后恢复历史累计限制。
+- 委托大厅支持画师报价、更新或撤回报价；发布者可比较报价并选定画师，也可搜索指定画师发送定向邀请。
+- 定向邀请只能由受邀画师接受或拒绝；成交后会自动关闭该委托的其他报价和邀请。
+>>>>>>> origin/group_code
 - “我”页面底部的设置可以通过旧密码或邮箱密码修改用户密码。
 
 如果依赖已经安装过，可以跳过安装：
@@ -211,12 +218,30 @@ star_sakura/
 - `POST /api/users/register/`：注册
 - `POST /api/users/login/`：登录，返回 JWT
 - `GET /api/users/me/`：当前用户信息
+<<<<<<< HEAD
+=======
+- `GET /api/users/profiles/{用户名或ID}/`：公开个人主页
+- `POST|DELETE /api/users/profiles/{用户名或ID}/follow/`：关注或取消关注
+- `GET /api/users/followers/`：我的粉丝
+- `GET /api/users/following/`：我关注的人
+- `GET /api/users/messages/conversations/`：私信会话与未读数
+- `GET|POST /api/users/messages/{用户名或ID}/`：读取或发送私信
+- `POST /api/users/messages/{用户名或ID}/read/`：标记会话已读
+>>>>>>> origin/group_code
 - `GET /api/artworks/?search=关键词`：画作搜索
 - `POST /api/artworks/`：发布画作
 - `POST /api/orders/`：下单购买
 - `POST /api/orders/{id}/accept/`：卖家接单
 - `POST /api/custom/`：提交线上定制
+<<<<<<< HEAD
 - `POST /api/custom/{id}/accept/`：接定制单
+=======
+- `GET|POST|DELETE /api/custom/{id}/bids/`：查看、提交/更新或撤回报价
+- `POST /api/custom/{id}/select-bid/`：发布者选中报价
+- `GET|POST /api/custom/{id}/invitations/`：查看或发送定向邀请
+- `POST /api/custom/{id}/respond-invitation/`：受邀画师接受或拒绝
+- `GET /api/custom/artists/?search=关键词`：搜索可邀请画师
+>>>>>>> origin/group_code
 - `POST /api/custom/{id}/set_progress/`：更新定制进度
 - `GET /api/reviews/`：查看评价
 
