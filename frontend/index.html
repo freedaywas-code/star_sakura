@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<!-- saved from url=(0117)#gallery -->
+<html lang="zh-CN"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>星漫</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section class="auth-page page-section" id="auth">
+    <div class="auth-modal">
+      <div class="auth-brand-panel" aria-hidden="true">
+        <span class="auth-brand-kicker">Star Manga Studio</span>
+        <div class="auth-brand-copy">
+          <h1>欢迎加入星漫</h1>
+          <p>在这里收藏灵感、发布作品、连接委托，让每一次创作都有清晰而优雅的起点。</p>
+        </div>
+        <span class="auth-brand-note">Create. Curate. Connect.</span>
+      </div>
+      <h2 id="authTitle">账号登录</h2>
+      <p id="authHint">登录后可以发布作品、提交委托并进入“我”的页面。</p>
+      <div class="auth-tabs">
+        <button class="auth-tab active" type="button" data-auth-mode="login">登录</button>
+        <button class="auth-tab" type="button" data-auth-mode="register">注册</button>
+      </div>
+      <form id="loginForm" class="auth-panel active">
+        <div class="form-group">
+          <label for="loginUsername">用户名</label>
+          <input id="loginUsername" type="text" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">密码</label>
+          <input id="loginPassword" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="submit-btn">登录</button>
+      </form>
+      <form id="registerForm" class="auth-panel">
+        <div class="form-group">
+          <label for="registerUsername">用户名</label>
+          <input id="registerUsername" type="text" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label for="registerEmail">邮箱</label>
+          <input id="registerEmail" type="email" autocomplete="email" required>
+        </div>
+        <div class="settings-grid" hidden>
+          <div class="form-group">
+            <label for="registerEmailPassword">邮箱密码</label>
+            <input id="registerEmailPassword" type="password">
+          </div>
+          <div class="form-group">
+            <label for="registerEmailPasswordConfirm">确认邮箱密码</label>
+            <input id="registerEmailPasswordConfirm" type="password">
+          </div>
+        </div>
+        <div class="settings-grid">
+          <div class="form-group">
+            <label for="registerPassword">用户密码</label>
+            <input id="registerPassword" type="password" autocomplete="new-password" required>
+          </div>
+          <div class="form-group">
+            <label for="registerPasswordConfirm">确认用户密码</label>
+            <input id="registerPasswordConfirm" type="password" autocomplete="new-password" required>
+          </div>
+        </div>
+        <button type="submit" class="submit-btn">创建账号</button>
+      </form>
+      <div class="auth-message" id="authMessage"></div>
+    </div>
+  </section>
+
+  <div class="image-preview hidden" id="imagePreview">
+    <div class="preview-frame">
+      <button class="preview-close" type="button" id="previewClose" aria-label="关闭预览">×</button>
+      <img id="previewImage" alt="画作预览">
+    </div>
+  </div>
+
+  <div class="artwork-detail hidden" id="artworkDetail">
+    <div class="artwork-detail-panel">
+      <div class="artwork-detail-image">
+        <img id="detailImage" alt="作品详情">
+      </div>
+      <div class="artwork-detail-side">
+        <div class="artwork-detail-head">
+          <div>
+            <h3 id="detailTitle">作品详情</h3>
+            <span class="artwork-detail-tag" id="detailTag">原创作品</span>
+            <button class="user-profile-link detail-owner-link" type="button" id="detailOwner" hidden></button>
+          </div>
+          <button class="detail-close" type="button" id="detailClose" aria-label="关闭详情">×</button>
+        </div>
+        <div class="comment-list" id="commentList"></div>
+        <form class="comment-form" id="commentForm">
+          <input id="commentCardId" type="hidden">
+          <textarea id="commentText" placeholder="留下你的评价，可以输入文字和表情"></textarea>
+          <input id="commentImageInput" type="file" accept="image/*" hidden>
+          <div class="comment-tools">
+            <button class="toolbar-btn secondary" type="button" id="commentImageBtn">选择图片</button>
+            <span class="comment-image-name" id="commentImageName"></span>
+            <button class="submit-btn" type="submit">发布评价</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="artwork-detail hidden" id="inspirationDetail">
+    <div class="inspiration-detail-panel">
+      <div class="inspiration-detail-main">
+        <div class="artwork-detail-head">
+          <div>
+            <h3 id="inspirationDetailTitle">灵感详情</h3>
+            <span class="artwork-detail-tag" id="inspirationDetailTag">灵感</span>
+          </div>
+          <button class="detail-close" type="button" id="inspirationDetailClose" aria-label="关闭灵感详情">×</button>
+        </div>
+        <div class="inspiration-detail-meta">
+          <button class="user-profile-link" type="button" id="inspirationDetailOwner"></button>
+          <span id="inspirationDetailDate"></span>
+        </div>
+        <div class="inspiration-detail-content" id="inspirationDetailContent"></div>
+      </div>
+      <div class="inspiration-detail-side">
+        <div class="artwork-detail-head">
+          <div>
+            <h3>评价</h3>
+            <span class="artwork-detail-tag" id="inspirationCommentCount">0 条</span>
+          </div>
+        </div>
+        <div class="comment-list" id="inspirationCommentList"></div>
+        <form class="comment-form" id="inspirationCommentForm">
+          <input id="inspirationCommentId" type="hidden">
+          <textarea id="inspirationCommentText" placeholder="留下你对这条灵感的评价"></textarea>
+          <div class="comment-tools">
+            <span class="comment-image-name" id="inspirationReplyHint">支持对评价回复，最多 2 层</span>
+            <button class="toolbar-btn secondary" type="button" id="cancelInspirationReplyBtn" hidden>取消回复</button>
+            <button class="submit-btn" type="submit">发布评价</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="artwork-detail hidden" id="commissionDetail">
+    <div class="commission-detail-panel">
+      <div class="artwork-detail-head">
+        <div>
+          <h3 id="commissionDetailTitle">委托详情</h3>
+          <span class="artwork-detail-tag" id="commissionDetailStatus">委托</span>
+        </div>
+        <button class="detail-close" type="button" id="commissionDetailClose" aria-label="关闭委托详情">×</button>
+      </div>
+      <div class="commission-detail-grid">
+        <div>
+          <span>类型</span>
+          <strong id="commissionDetailType"></strong>
+        </div>
+        <div>
+          <span>预算</span>
+          <strong id="commissionDetailBudget"></strong>
+        </div>
+        <div>
+          <span>发布者</span>
+          <strong id="commissionDetailRequester"></strong>
+        </div>
+        <div>
+          <span>接单者</span>
+          <strong id="commissionDetailArtist"></strong>
+        </div>
+        <div id="commissionDetailAgreedPriceRow" hidden>
+          <span id="commissionDetailAgreedPriceLabel"></span>
+          <strong id="commissionDetailAgreedPrice"></strong>
+        </div>
+        <div>
+          <span>发布时间</span>
+          <strong id="commissionDetailDate"></strong>
+        </div>
+      </div>
+      <div class="commission-detail-desc" id="commissionDetailDescription"></div>
+      <div class="commission-detail-actions" id="commissionDetailActions"></div>
+      <section class="commission-workspace" id="commissionWorkspace">
+        <div class="commission-workspace-head">
+          <div>
+            <h4 id="commissionWorkspaceTitle"></h4>
+            <p id="commissionWorkspaceHint">...</p>
+          </div>
+          <button class="commission-btn secondary compact" type="button" id="commissionDetailRefresh">Refresh</button>
+        </div>
+        <div class="commission-workspace-grid">
+          <section class="commission-market-panel" id="commissionBidPanel">
+            <div class="commission-market-title">
+              <div>
+                <span class="commission-market-kicker" id="commissionBidKicker"></span>
+                <h5 id="commissionBidTitle"></h5>
+              </div>
+              <span class="commission-count-badge" id="commissionDetailBidCount">0</span>
+            </div>
+            <div id="commissionBidComposer"></div>
+            <div class="commission-market-list" id="commissionDetailBidList"></div>
+          </section>
+          <section class="commission-market-panel" id="commissionInvitationPanel">
+            <div class="commission-market-title">
+              <div>
+                <span class="commission-market-kicker" id="commissionInvitationKicker"></span>
+                <h5 id="commissionInvitationTitle"></h5>
+              </div>
+              <span class="commission-count-badge" id="commissionDetailInvitationCount">0</span>
+            </div>
+            <div id="commissionInviteComposer"></div>
+            <div class="commission-market-list" id="commissionDetailInvitationList"></div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <nav id="navbar" class="">
+    <div class="logo">
+      <img src="star_sakura_text_logo.png" alt="星漫 Logo">
+      <span>星漫</span>
+    </div>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#home" data-page="home" class="active">首页</a></li>
+      <li><a href="#gallery" data-page="gallery">作品</a></li>
+      <li><a href="#contact" data-page="contact">委托</a></li>
+      <li><a href="#blog" data-page="blog">灵感</a></li>
+      <li><a href="#ai" data-page="ai">AI 助手</a></li>
+      <li><a href="#me" data-page="me">我</a></li>
+    </ul>
+    <div class="nav-account">
+      <form class="nav-search" id="navSearchForm" role="search">
+        <input id="navSearchInput" type="search" placeholder="搜索作品、委托、灵感" autocomplete="off">
+        <button type="submit" aria-label="搜索">搜索</button>
+      </form>
+      <button class="nav-publish" type="button" id="publishNavBtn">发布</button>
+      <button class="nav-message" type="button" id="messageNavBtn" aria-label="私信">
+        <span aria-hidden="true">私信</span>
+        <span class="nav-unread-badge" id="messageUnreadBadge" hidden>0</span>
+      </button>
+      <button class="nav-user" type="button" id="navUserChip">
+        <span class="nav-avatar" id="navUserAvatar">我</span>
+        <span class="nav-name" id="navUserName">未登录</span>
+      </button>
+    </div>
+    <div class="hamburger" id="hamburger">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+  </nav>
+
+  <section class="home page-section active" id="home">
+    <div class="parallax-bg" style="transform: translateY(0px);"></div>
+    <div class="particles">
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+    </div>
+    <div class="home-content">
+      <h1>欢迎来到<span>星漫</span></h1>
+      <p>这里展示了大家创造的动漫角色与幻想世界</p>
+      <a href="#gallery" class="cta-button">✨ 探索你喜欢的IP</a>
+    </div>
+  </section>
+
+  <section class="section publish page-section" id="publish">
+    <div class="section-title fade-in visible">
+      <h2 id="publishPageTitle">发布作品</h2>
+      <p id="publishPageHint">上传图片，填写作品名称和标签后发布到作品页</p>
+    </div>
+    <div class="publish-layout">
+      <div class="publish-preview fade-in visible">
+        <div class="publish-image-box" id="publishImageBox">
+          <span id="publishImagePlaceholder">点击上传作品图片</span>
+          <img id="publishImagePreview" alt="作品预览" hidden>
+        </div>
+        <input id="publishImageInput" type="file" accept="image/*" hidden>
+      </div>
+      <div class="publish-form-panel fade-in visible">
+        <form id="publishForm">
+          <input id="publishCardId" type="hidden">
+          <input id="publishType" type="hidden" value="artwork">
+          <div class="publish-type">
+            <button type="button" class="active" data-publish-type="artwork">发布作品</button>
+            <button type="button" data-publish-type="inspiration">发布灵感</button>
+            <button type="button" data-publish-type="commission">发布委托</button>
+          </div>
+          <div class="form-group">
+            <label for="publishName" id="publishNameLabel">作品名称</label>
+            <input id="publishName" type="text" required placeholder="请输入作品名称">
+          </div>
+          <div class="form-group">
+            <label for="publishTag" id="publishTagLabel">作品标签</label>
+            <input id="publishTag" type="text" required placeholder="例如：原创角色 / 魔法少女">
+          </div>
+          <div class="form-group" id="publishContentGroup" hidden>
+            <label for="publishContent">灵感内容</label>
+            <textarea id="publishContent" placeholder="记录你的创作想法、过程或心得"></textarea>
+          </div>
+          <div class="form-group" id="publishEditTimeGroup" hidden>
+            <label for="publishEditTime">最新编辑时间</label>
+            <input id="publishEditTime" type="text" readonly>
+          </div>
+          <div class="form-group" id="publishBudgetGroup" hidden>
+            <label for="publishBudget">委托预算</label>
+            <input id="publishBudget" type="text" placeholder="例如：500-1000 元 / 可商议">
+          </div>
+          <div class="inline-actions">
+            <button type="submit" class="submit-btn" id="publishSubmitBtn">发布作品</button>
+            <button type="button" class="toolbar-btn secondary" id="publishCancelBtn">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="section search-page page-section" id="search">
+    <div class="section-title fade-in visible">
+      <h2 id="searchPageTitle">搜索</h2>
+      <p id="searchPageHint">输入关键词，发现相关作品、委托和灵感</p>
+    </div>
+    <div class="search-shell fade-in visible">
+      <form class="search-hero-form" id="searchPageForm" role="search">
+        <input id="searchPageInput" type="search" placeholder="搜索作品、委托、灵感" autocomplete="off">
+        <button type="submit">搜索</button>
+      </form>
+      <div class="search-tabs" id="searchTabs">
+        <button class="active" type="button" data-search-type="all">全部</button>
+        <button type="button" data-search-type="artworks">作品</button>
+        <button type="button" data-search-type="commissions">委托</button>
+        <button type="button" data-search-type="inspirations">灵感</button>
+      </div>
+      <div class="search-summary" id="searchSummary">请输入关键词开始搜索</div>
+      <div class="search-results" id="searchResults"></div>
+    </div>
+  </section>
+
+  <section class="section gallery page-section" id="gallery">
+    <div class="section-title fade-in visible">
+      <h2>角色画廊</h2>
+      <p>每一个角色都有属于自己的故事</p>
+    </div>
+    <div class="gallery-grid" id="galleryGrid"></div>
+    <div class="gallery-pagination" id="galleryPagination" aria-label="作品加载状态"></div>
+  </section>
+
+  <section class="section contact page-section" id="contact">
+    <div class="section-title fade-in visible">
+      <h2>联系与委托</h2>
+      <p>期待与你的合作</p>
+    </div>
+    <div class="contact-container">
+      <div class="commission-status fade-in visible">
+        <h3>委托状态</h3>
+        <span class="status-badge" id="commissionStatusBadge">加载委托配置中</span>
+        <ul class="price-list" id="commissionPriceList"></ul>
+      </div>
+      <div class="contact-form fade-in visible">
+        <h3>发送消息</h3>
+        <form id="contactForm">
+          <div class="form-group">
+            <label for="name">你的名字</label>
+            <input type="text" id="name" name="name" required="" placeholder="请输入你的名字">
+          </div>
+          <div class="form-group">
+            <label for="email">电子邮箱</label>
+            <input type="email" id="email" name="email" required="" placeholder="example@email.com">
+          </div>
+          <div class="form-group">
+            <label for="type">委托类型</label>
+            <select id="type" name="type">
+              <option value="">加载委托类型中</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="message">留言内容</label>
+            <textarea id="message" name="message" required="" placeholder="请描述你的需求..."></textarea>
+          </div>
+          <button type="submit" class="submit-btn">发送消息 💌</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="section blog page-section" id="blog">
+    <div class="section-title fade-in visible">
+      <h2>灵感日志</h2>
+      <p>记录创作路上的点点滴滴</p>
+    </div>
+    <div class="blog-list" id="blogList"></div>
+  </section>
+
+  <section class="section me page-section" id="me">
+    <div class="profile-page">
+      <div class="profile-hero fade-in visible">
+        <div class="profile-cover"></div>
+        <div class="profile-head">
+          <div class="profile-avatar" id="profileAvatar">我</div>
+          <div class="profile-main">
+            <h2 id="profileDisplayName">资料加载中</h2>
+            <p class="profile-handle" id="profileHandle">@user</p>
+            <p class="profile-bio" id="profileBio">登录后查看个人资料</p>
+            <div class="profile-stats">
+              <div><strong id="profileArtworkCount">0</strong><span>作品</span></div>
+              <div><strong id="profileCommissionCount">0</strong><span>委托</span></div>
+              <div><strong id="profileCreativeYears">0</strong><span>创作年限</span></div>
+              <button class="profile-stat-button" type="button" data-social-list="followers"><strong id="profileFollowerCount">0</strong><span>粉丝</span></button>
+              <button class="profile-stat-button" type="button" data-social-list="following"><strong id="profileFollowingCount">0</strong><span>关注</span></button>
+            </div>
+          </div>
+          <div class="profile-actions">
+            <button type="button" class="toolbar-btn secondary" id="openSettingsFromProfileBtn">设置</button>
+          </div>
+        </div>
+        <div class="profile-intro fade-in visible">
+          <div>
+            <span class="intro-kicker">简介</span>
+            <h2 id="profileIntroTitle">个人资料</h2>
+            <p id="profileIntroText">登录后从数据库加载资料。</p>
+            <p id="profilePhilosophyText">创作理念：登录后可编辑。</p>
+          </div>
+          <div>
+            <span class="intro-kicker">技能</span>
+            <div class="tools-list intro-tools" id="profileSkillList"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-tabs fade-in visible">
+        <button class="profile-tab active" type="button" data-profile-tab="works">作品</button>
+        <button class="profile-tab" type="button" data-profile-tab="inspirations">灵感</button>
+        <button class="profile-tab" type="button" data-profile-tab="commissions">委托</button>
+        <button class="profile-tab" type="button" data-profile-tab="history">浏览历史</button>
+        <button class="profile-tab" type="button" data-profile-tab="likes">点赞</button>
+        <button class="profile-tab" type="button" data-profile-tab="favorites">收藏</button>
+        <button class="profile-tab" type="button" data-profile-tab="followers">粉丝</button>
+        <button class="profile-tab" type="button" data-profile-tab="following">关注</button>
+        <button class="profile-tab" type="button" data-profile-tab="profile" hidden>资料</button>
+        <button class="profile-tab" type="button" data-profile-tab="settings" hidden>设置</button>
+      </div>
+
+      <div class="profile-tab-panel active" data-profile-panel="works">
+        <div class="me-panel fade-in visible">
+          <h3>我发布的画作</h3>
+          <div class="mini-list" id="myArtworkList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="inspirations">
+        <div class="me-panel fade-in visible">
+          <h3>我发布的灵感</h3>
+          <div class="mini-list" id="myInspirationList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="commissions">
+        <div class="me-panel fade-in visible">
+          <h3>我的作画委托</h3>
+          <div class="mini-list" id="myCommissionList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="history">
+        <div class="me-panel fade-in visible">
+          <h3>浏览历史</h3>
+          <div class="mini-list" id="myHistoryList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="likes">
+        <div class="me-panel fade-in visible">
+          <h3>我的点赞</h3>
+          <div class="mini-list" id="myLikeList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="favorites">
+        <div class="me-panel fade-in visible">
+          <h3>我的收藏</h3>
+          <div class="mini-list" id="myFavoriteList"></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="followers">
+        <div class="me-panel fade-in visible">
+          <div class="social-list-head">
+            <h3>我的粉丝</h3>
+            <button class="toolbar-btn secondary compact" type="button" data-refresh-social-list="followers">刷新</button>
+          </div>
+          <div class="social-user-list" id="myFollowerList"><div class="empty-state">正在加载粉丝...</div></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="following">
+        <div class="me-panel fade-in visible">
+          <div class="social-list-head">
+            <h3>我关注的人</h3>
+            <button class="toolbar-btn secondary compact" type="button" data-refresh-social-list="following">刷新</button>
+          </div>
+          <div class="social-user-list" id="myFollowingList"><div class="empty-state">正在加载关注列表...</div></div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="profile">
+        <div class="profile-grid single-panel">
+          <div class="profile-panel fade-in visible">
+            <h3>编辑个人信息</h3>
+            <form id="profileForm">
+              <div class="profile-avatar-field">
+                <div class="profile-avatar-edit" id="profileAvatarEdit">我</div>
+                <div>
+                  <button type="button" class="avatar-upload-btn" id="profileAvatarBtn">更换头像</button>
+                  <input id="profileAvatarInput" type="file" accept="image/*" hidden>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="profileDisplayNameInput">ID / 昵称</label>
+                <input id="profileDisplayNameInput" type="text" placeholder="输入昵称">
+              </div>
+              <div class="form-group">
+                <label for="profileUsername">用户名</label>
+                <input id="profileUsername" type="text" disabled>
+              </div>
+              <div class="form-group">
+                <label for="profileEmail">邮箱</label>
+                <input id="profileEmail" type="email" disabled>
+              </div>
+              <div class="form-group">
+                <label for="profileGender">性别</label>
+                <select id="profileGender">
+                  <option value="">未设置</option>
+                  <option value="female">女</option>
+                  <option value="male">男</option>
+                  <option value="other">其他</option>
+                  <option value="private">保密</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="profileBirthday">生日</label>
+                <input id="profileBirthday" type="date">
+              </div>
+              <div class="form-group">
+                <label for="profileCreativeYearsInput">创作年限</label>
+                <input id="profileCreativeYearsInput" type="text" placeholder="例如：10+ / 3 年 / 2020 至今">
+              </div>
+              <div class="form-group">
+                <label for="profileSignature">简介</label>
+                <textarea id="profileSignature" placeholder="写一段展示在头像下方的简介"></textarea>
+              </div>
+              <div class="form-group">
+                <label for="profilePhilosophy">创作理念</label>
+                <textarea id="profilePhilosophy" placeholder="输入你的创作理念"></textarea>
+              </div>
+              <div class="form-group">
+                <label for="profileSkillInput">技能</label>
+                <div class="skill-editor">
+                  <input id="profileSkillInput" type="text" placeholder="输入技能，例如 Photoshop">
+                  <button type="button" class="avatar-upload-btn" id="addProfileSkillBtn">添加</button>
+                </div>
+                <div class="skill-editor-list" id="profileSkillEditorList"></div>
+              </div>
+              <div class="form-group">
+                <label for="profileHomeTags">首页推荐标签</label>
+                <input id="profileHomeTags" type="text" placeholder="例如：原创角色、魔法少女、赛博朋克">
+                <div class="skill-editor-list recommendation-tag-list" id="profileHomeTagList"></div>
+              </div>
+              <button type="submit" class="submit-btn">保存资料</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-tab-panel" data-profile-panel="settings">
+        <div class="me-panel fade-in visible">
+          <h3>设置</h3>
+          <div class="settings-entry" id="settingsEntry">
+            <button type="button" class="settings-entry-btn" id="openSettingsDetailBtn">进入设置</button>
+          </div>
+          <div class="settings-detail" id="settingsDetail" hidden>
+            <div class="settings-account-actions">
+              <button type="button" class="toolbar-btn secondary" id="switchAccountBtn">切换账户</button>
+              <button type="button" class="toolbar-btn secondary" id="logoutBtn">退出登录</button>
+            </div>
+            <div id="settingsProfileSlot"></div>
+            <div class="settings-grid">
+            <div>
+              <h4>通过旧密码修改</h4>
+              <div class="form-group">
+                <label for="oldPassword">旧密码</label>
+                <input id="oldPassword" type="password">
+              </div>
+              <div class="form-group">
+                <label for="newPasswordOld">新密码</label>
+                <input id="newPasswordOld" type="password">
+              </div>
+              <div class="form-group">
+                <label for="confirmPasswordOld">确认新密码</label>
+                <input id="confirmPasswordOld" type="password">
+              </div>
+              <button type="button" class="submit-btn" id="changeByOldPasswordBtn">修改密码</button>
+            </div>
+            <div hidden>
+              <h4>通过邮箱修改</h4>
+              <div class="form-group">
+                <label for="resetEmail">邮箱</label>
+                <input id="resetEmail" type="email">
+              </div>
+              <div class="form-group">
+                <label for="resetEmailPassword">邮箱密码</label>
+                <input id="resetEmailPassword" type="password">
+              </div>
+              <div class="form-group">
+                <label for="newPasswordEmail">新密码</label>
+                <input id="newPasswordEmail" type="password">
+              </div>
+              <div class="form-group">
+                <label for="confirmPasswordEmail">确认新密码</label>
+                <input id="confirmPasswordEmail" type="password">
+              </div>
+              <button type="button" class="submit-btn" id="changeByEmailBtn">邮箱验证改密</button>
+            </div>
+            </div>
+            <div class="auth-message" id="settingsMessage"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section public-profile-page page-section" id="userProfile">
+    <div class="public-profile-shell">
+      <button type="button" class="public-profile-top-back" id="publicProfileTopBackBtn">← 返回</button>
+      <div class="profile-hero" id="publicProfileHero">
+        <div class="profile-cover"></div>
+        <div class="profile-head">
+          <div class="profile-avatar" id="publicProfileAvatar">画</div>
+          <div class="profile-main">
+            <h2 id="publicProfileDisplayName">正在加载...</h2>
+            <p class="profile-handle" id="publicProfileHandle">@user</p>
+            <p class="profile-bio" id="publicProfileBio">正在读取公开资料</p>
+            <div class="profile-stats">
+              <div><strong id="publicProfileArtworkCount">0</strong><span>作品</span></div>
+              <div><strong id="publicProfileFollowerCount">0</strong><span>粉丝</span></div>
+              <div><strong id="publicProfileFollowingCount">0</strong><span>关注</span></div>
+              <div><strong id="publicProfileCreativeYears">0</strong><span>创作年限</span></div>
+            </div>
+          </div>
+          <div class="profile-actions public-profile-actions">
+            <button type="button" class="toolbar-btn" id="publicProfileFollowBtn">关注</button>
+            <button type="button" class="toolbar-btn secondary" id="publicProfileMessageBtn">私信</button>
+          </div>
+        </div>
+        <div class="profile-intro">
+          <div>
+            <span class="intro-kicker">简介</span>
+            <p id="publicProfileIntro">这个人还没有填写简介。</p>
+            <p id="publicProfilePhilosophy">暂未填写创作理念。</p>
+          </div>
+          <div>
+            <span class="intro-kicker">技能</span>
+            <div class="tools-list intro-tools" id="publicProfileSkillList"></div>
+          </div>
+        </div>
+      </div>
+      <div class="me-panel public-profile-works">
+        <div class="social-list-head">
+          <h3>TA 的作品</h3>
+          <button type="button" class="toolbar-btn secondary compact" id="publicProfileBackBtn">返回</button>
+        </div>
+        <div class="public-work-grid" id="publicProfileArtworkList"><div class="empty-state">正在加载作品...</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section messages-page page-section" id="messages">
+    <div class="section-title fade-in visible">
+      <h2>私信</h2>
+      <p>和互相关注的创作者自由交流；尚未互关时，每一方最多发送 3 条消息。</p>
+    </div>
+    <div class="message-shell fade-in visible">
+      <aside class="conversation-pane">
+        <div class="message-pane-head">
+          <div>
+            <span class="message-kicker">Conversations</span>
+            <h3>会话</h3>
+          </div>
+          <button class="message-icon-btn" type="button" id="refreshConversationsBtn" aria-label="刷新会话">↻</button>
+        </div>
+        <div class="conversation-list" id="conversationList"><div class="message-empty">正在加载会话...</div></div>
+      </aside>
+      <section class="chat-pane" id="chatPane">
+        <div class="message-empty chat-welcome" id="chatWelcome">
+          <strong>选择一位创作者开始聊天</strong>
+          <span>你也可以从对方的个人主页发起私信。</span>
+        </div>
+        <div class="chat-active" id="chatActive" hidden>
+          <header class="chat-head">
+            <button class="message-icon-btn chat-back-btn" type="button" id="chatBackBtn" aria-label="返回会话">←</button>
+            <button class="chat-person user-profile-link" type="button" id="chatPersonBtn">
+              <span class="message-avatar" id="chatAvatar">画</span>
+              <span><strong id="chatDisplayName">创作者</strong><small id="chatUsername">@user</small></span>
+            </button>
+            <span class="message-limit-badge" id="messageLimitBadge">剩余 3 条</span>
+          </header>
+          <div class="message-history" id="messageHistory"></div>
+          <button class="load-message-history" type="button" id="loadOlderMessagesBtn" hidden>加载更早消息</button>
+          <form class="message-composer" id="messageComposer">
+            <textarea id="messageBody" maxlength="2000" placeholder="输入私信内容，Enter 发送，Shift + Enter 换行"></textarea>
+            <div class="message-composer-foot">
+              <span id="messageComposerHint">未互关时，你最多可以发送 3 条消息。</span>
+              <button class="submit-btn" type="submit" id="sendMessageBtn">发送</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  </section>
+
+
+  <section class="section ai-page page-section" id="ai">
+    <div class="ai-workspace">
+      <aside class="ai-history-sidebar">
+        <div class="ai-history-head">
+          <div><span class="ai-kicker">STAR SAKURA AI</span><h2>聊天记录</h2></div>
+          <button id="aiNewChatBtn" type="button" aria-label="新建聊天">＋</button>
+        </div>
+        <div class="ai-conversation-list" id="aiConversationList"></div>
+        <div class="ai-history-foot">聊天记录仅保存在当前浏览器</div>
+      </aside>
+      <main class="ai-page-shell">
+        <header class="ai-panel-head">
+          <div><span class="ai-kicker">AI ASSISTANT</span><h3 id="aiChatTitle">新对话</h3></div>
+          <div class="ai-head-actions">
+            <button id="aiSettingsBtn" type="button" aria-label="API 设置">⚙</button>
+          </div>
+        </header>
+        <div class="ai-settings" id="aiSettings" hidden>
+          <p>留空即使用平台默认配置。自定义配置只保存在当前浏览器。</p>
+          <label>API Base<input id="aiApiBase" type="url" placeholder="https://open.bigmodel.cn/api/paas/v4"></label>
+          <label>模型<input id="aiModel" type="text" placeholder="glm-4-flash"></label>
+          <label>视觉模型<input id="aiVisionModel" type="text" placeholder="glm-4.6v-flash"></label>
+          <label>API Key<input id="aiApiKey" type="password" autocomplete="off" placeholder="输入你自己的 API Key"></label>
+          <div class="ai-settings-actions">
+            <button class="toolbar-btn secondary compact" id="aiResetConfig" type="button">使用默认</button>
+            <button class="submit-btn compact" id="aiSaveConfig" type="button">保存</button>
+          </div>
+        </div>
+        <div class="ai-messages" id="aiMessages"></div>
+        <div class="ai-image-attachment" id="aiImageAttachment" hidden>
+          <img id="aiImagePreview" alt="待鉴赏图片预览">
+          <span><strong id="aiImageName">已选择图片</strong><small>AI 将从画风、构图、色彩、技法与艺术史角度进行鉴赏</small></span>
+          <button id="aiRemoveImageBtn" type="button" aria-label="移除图片">×</button>
+        </div>
+        <small class="ai-note">支持上传作品进行美术鉴赏；艺术知识问题会自动联网检索。AI 内容仅供参考。</small>
+        <form class="ai-composer" id="aiComposer">
+          <button class="ai-image-button" id="aiImageButton" type="button" aria-label="上传作品进行鉴赏">＋</button>
+          <input id="aiImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+          <textarea id="aiInput" maxlength="4000" rows="2" placeholder="聊聊天，或描述你的创作需求…"></textarea>
+          <button class="submit-btn" id="aiSendBtn" type="submit">发送</button>
+        </form>
+      </main>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-content">
+      <div class="footer-logo">
+        <img src="star_sakura_logo.png" alt="星漫 Logo">
+      </div>
+      <div class="social-links">
+        <a href="#" title="微信公众号" class="wechat-link" aria-label="微信公众号">
+          💬
+          <span class="wechat-qr" aria-hidden="true">
+            <img src="weichat_logo.jpg" alt="">
+          </span>
+        </a>
+        <a href="#" title="Bilibili">📺</a>
+        <a href="#" title="抖音">🎵</a>
+      </div>
+      <p>© 2026 星漫.Comics from Star.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+
+</body></html>

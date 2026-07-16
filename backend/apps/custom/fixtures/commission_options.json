@@ -1,0 +1,38 @@
+[
+  {
+    "code": "avatar",
+    "title": "头像/大头贴",
+    "price_label": "¥200起",
+    "sort_order": 10
+  },
+  {
+    "code": "half",
+    "title": "半身立绘",
+    "price_label": "¥500起",
+    "sort_order": 20
+  },
+  {
+    "code": "full",
+    "title": "全身立绘",
+    "price_label": "¥800起",
+    "sort_order": 30
+  },
+  {
+    "code": "illustration",
+    "title": "插画/场景图",
+    "price_label": "¥1500起",
+    "sort_order": 40
+  },
+  {
+    "code": "live2d",
+    "title": "Live2D模型",
+    "price_label": "¥3000起",
+    "sort_order": 50
+  },
+  {
+    "code": "other",
+    "title": "其他",
+    "price_label": "可商议",
+    "sort_order": 60
+  }
+]
