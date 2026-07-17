@@ -1,8 +1,5 @@
-<<<<<<< HEAD
-=======
 from decimal import Decimal
 
->>>>>>> origin/group_code
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -42,8 +39,6 @@ class CustomRequest(models.Model):
     progress = models.PositiveSmallIntegerField("进度", default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
     accepted_at = models.DateTimeField("接单时间", blank=True, null=True)
     abandon_requested_at = models.DateTimeField("申请放弃时间", blank=True, null=True)
-<<<<<<< HEAD
-=======
     agreed_price = models.DecimalField(
         "成交价",
         max_digits=10,
@@ -59,7 +54,6 @@ class CustomRequest(models.Model):
         blank=True,
         null=True,
     )
->>>>>>> origin/group_code
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
     updated_at = models.DateTimeField("更新时间", auto_now=True)
 
@@ -78,8 +72,6 @@ class CustomRequest(models.Model):
         return self.title
 
 
-<<<<<<< HEAD
-=======
 class CommissionBid(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "竞价中"
@@ -194,7 +186,6 @@ class CommissionInvitation(models.Model):
         return f"{self.custom_request} -> {self.artist}"
 
 
->>>>>>> origin/group_code
 class CommissionOption(models.Model):
     code = models.SlugField("选项代码", max_length=40, unique=True)
     title = models.CharField("委托类型", max_length=80)

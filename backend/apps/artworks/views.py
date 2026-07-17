@@ -1,14 +1,9 @@
-<<<<<<< HEAD
-from django.db.models import Count
-from rest_framework import permissions, viewsets
-=======
 import math
 import re
 
 from django.db.models import Count
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
->>>>>>> origin/group_code
 from rest_framework.exceptions import PermissionDenied
 
 from common.caching import CachedPublicReadMixin
@@ -48,8 +43,6 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
     def perform_destroy(self, instance):
         self._ensure_owner_or_admin(instance)
         instance.delete()
-<<<<<<< HEAD
-=======
 
     @action(detail=False, methods=["get", "post"])
     def recommendations(self, request):
@@ -225,4 +218,3 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
             return
         for tag in self._artwork_tags(artwork):
             behavior_weights[tag] = behavior_weights.get(tag, 0) + weight
->>>>>>> origin/group_code

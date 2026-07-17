@@ -1,11 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-<<<<<<< HEAD
-from .models import User
-=======
 from .models import DirectMessage, Follow, User
->>>>>>> origin/group_code
 
 
 @admin.register(User)
@@ -15,8 +11,6 @@ class UserAdmin(DjangoUserAdmin):
     fieldsets = DjangoUserAdmin.fieldsets + (
         ("星野樱平台信息", {"fields": ("is_admin", "avatar", "bio")}),
     )
-<<<<<<< HEAD
-=======
 
 
 @admin.register(Follow)
@@ -33,4 +27,3 @@ class DirectMessageAdmin(admin.ModelAdmin):
     list_filter = ["created_at", "read_at"]
     list_select_related = ["sender", "recipient"]
     readonly_fields = ["created_at", "read_at"]
->>>>>>> origin/group_code

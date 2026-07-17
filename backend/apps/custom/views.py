@@ -1,15 +1,9 @@
 from datetime import timedelta
-<<<<<<< HEAD
-
-from django.db import transaction
-from django.db.models import Q
-=======
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
->>>>>>> origin/group_code
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
@@ -20,10 +14,6 @@ from common.caching import CachedPublicReadMixin
 from common.response import ApiResponseMixin, ok
 from common.throttling import WriteScopedThrottleMixin
 
-<<<<<<< HEAD
-from .models import CommissionOption, CustomRequest
-from .serializers import CommissionOptionSerializer, CustomRequestSerializer
-=======
 from .models import CommissionBid, CommissionInvitation, CommissionOption, CustomRequest
 from .serializers import (
     ArtistCandidateSerializer,
@@ -39,7 +29,6 @@ from .serializers import (
 
 
 User = get_user_model()
->>>>>>> origin/group_code
 
 
 class CommissionOptionViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ReadOnlyModelViewSet):
@@ -64,9 +53,6 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-<<<<<<< HEAD
-        queryset = CustomRequest.objects.select_related("requester", "artist").all()
-=======
         queryset = (
             CustomRequest.objects.select_related("requester", "artist", "selected_bid__artist")
             .annotate(
@@ -77,7 +63,6 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 )
             )
         )
->>>>>>> origin/group_code
         public_statuses = [
             CustomRequest.Status.SUBMITTED,
             CustomRequest.Status.ACCEPTED,
@@ -85,8 +70,6 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
         ]
         if not self.request.user.is_authenticated:
             return queryset.filter(status__in=public_statuses)
-<<<<<<< HEAD
-=======
         queryset = queryset.prefetch_related(
             Prefetch(
                 "bids",
@@ -99,20 +82,15 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 to_attr="_candidate_invitations",
             ),
         )
->>>>>>> origin/group_code
         if self.request.user.is_admin:
             return queryset
         return queryset.filter(
             Q(status__in=public_statuses)
             | Q(requester=self.request.user)
             | Q(artist=self.request.user)
-<<<<<<< HEAD
-        )
-=======
             | Q(bids__artist=self.request.user)
             | Q(invitations__artist=self.request.user)
         ).distinct()
->>>>>>> origin/group_code
 
     def perform_create(self, serializer):
         serializer.save(requester=self.request.user, status=CustomRequest.Status.SUBMITTED)
@@ -127,20 +105,6 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
             return
         raise PermissionDenied("Only the artist or admin can update this commission.")
 
-<<<<<<< HEAD
-    def perform_update(self, serializer):
-        custom_request = self.get_object()
-        self._ensure_requester_or_admin(custom_request)
-        if custom_request.status != CustomRequest.Status.SUBMITTED:
-            raise ValidationError("Accepted commissions cannot be edited.")
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        self._ensure_requester_or_admin(instance)
-        if instance.status != CustomRequest.Status.SUBMITTED:
-            raise ValidationError("Accepted commissions cannot be deleted.")
-        instance.delete()
-=======
     @staticmethod
     def _ensure_open(custom_request):
         if (
@@ -486,24 +450,10 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 invitation=invitation,
             )
         return ok(CustomRequestSerializer(custom_request, context={"request": request}).data)
->>>>>>> origin/group_code
 
     @action(detail=True, methods=["post"])
     def accept(self, request, pk=None):
         with transaction.atomic():
-<<<<<<< HEAD
-            custom_request = get_object_or_404(self.get_queryset().select_for_update(), pk=pk)
-            if custom_request.requester_id == request.user.id:
-                raise ValidationError("You cannot accept your own commission.")
-            if custom_request.status != CustomRequest.Status.SUBMITTED or custom_request.artist_id:
-                raise ValidationError("This commission has already been accepted.")
-            custom_request.artist = request.user
-            custom_request.status = CustomRequest.Status.ACCEPTED
-            custom_request.progress = max(custom_request.progress, 10)
-            custom_request.accepted_at = timezone.now()
-            custom_request.abandon_requested_at = None
-            custom_request.save(update_fields=["artist", "status", "progress", "accepted_at", "abandon_requested_at", "updated_at"])
-=======
             custom_request = self._locked_custom_request(pk)
             self._ensure_open(custom_request)
             bids, invitations = self._lock_candidates(custom_request)
@@ -528,37 +478,18 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 invitations,
                 invitation=invitation,
             )
->>>>>>> origin/group_code
         return ok(CustomRequestSerializer(custom_request, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
     def abandon(self, request, pk=None):
         with transaction.atomic():
-<<<<<<< HEAD
-            custom_request = get_object_or_404(self.get_queryset().select_for_update(), pk=pk)
-=======
             custom_request = self._locked_custom_request(pk)
->>>>>>> origin/group_code
             self._ensure_artist_or_admin(custom_request)
             if custom_request.status != CustomRequest.Status.ACCEPTED:
                 raise ValidationError("This commission cannot be abandoned now.")
 
             accepted_at = custom_request.accepted_at or custom_request.updated_at
             if accepted_at and timezone.now() - accepted_at <= timedelta(hours=1):
-<<<<<<< HEAD
-                custom_request.artist = None
-                custom_request.status = CustomRequest.Status.SUBMITTED
-                custom_request.progress = 0
-                custom_request.accepted_at = None
-                custom_request.abandon_requested_at = None
-                update_fields = ["artist", "status", "progress", "accepted_at", "abandon_requested_at", "updated_at"]
-            else:
-                custom_request.status = CustomRequest.Status.ABANDON_REQUESTED
-                custom_request.abandon_requested_at = timezone.now()
-                update_fields = ["status", "abandon_requested_at", "updated_at"]
-
-            custom_request.save(update_fields=update_fields)
-=======
                 bids, invitations = self._lock_candidates(custom_request)
                 self._reopen_commission(custom_request, bids, invitations)
             else:
@@ -566,17 +497,12 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 custom_request.abandon_requested_at = timezone.now()
                 custom_request.save(update_fields=["status", "abandon_requested_at", "updated_at"])
 
->>>>>>> origin/group_code
         return ok(CustomRequestSerializer(custom_request, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
     def resolve_abandon(self, request, pk=None):
         with transaction.atomic():
-<<<<<<< HEAD
-            custom_request = get_object_or_404(self.get_queryset().select_for_update(), pk=pk)
-=======
             custom_request = self._locked_custom_request(pk)
->>>>>>> origin/group_code
             self._ensure_requester_or_admin(custom_request)
             if custom_request.status != CustomRequest.Status.ABANDON_REQUESTED:
                 raise ValidationError("There is no pending abandon request.")
@@ -584,19 +510,6 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
             approved = request.data.get("approved", True)
             approved = approved is True or str(approved).lower() in {"1", "true", "yes", "on"}
             if approved:
-<<<<<<< HEAD
-                custom_request.artist = None
-                custom_request.status = CustomRequest.Status.SUBMITTED
-                custom_request.progress = 0
-                custom_request.accepted_at = None
-                update_fields = ["artist", "status", "progress", "accepted_at", "abandon_requested_at", "updated_at"]
-            else:
-                custom_request.status = CustomRequest.Status.ACCEPTED
-                update_fields = ["status", "abandon_requested_at", "updated_at"]
-            custom_request.abandon_requested_at = None
-            custom_request.save(update_fields=update_fields)
-        return ok(CustomRequestSerializer(custom_request, context={"request": request}).data, status=status.HTTP_200_OK)
-=======
                 bids, invitations = self._lock_candidates(custom_request)
                 self._reopen_commission(custom_request, bids, invitations)
             else:
@@ -604,15 +517,10 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 custom_request.abandon_requested_at = None
                 custom_request.save(update_fields=["status", "abandon_requested_at", "updated_at"])
         return ok(CustomRequestSerializer(custom_request, context={"request": request}).data)
->>>>>>> origin/group_code
 
     @action(detail=True, methods=["post"])
     def set_progress(self, request, pk=None):
         with transaction.atomic():
-<<<<<<< HEAD
-            custom_request = get_object_or_404(self.get_queryset().select_for_update(), pk=pk)
-            self._ensure_artist_or_admin(custom_request)
-=======
             custom_request = self._locked_custom_request(pk)
             self._ensure_artist_or_admin(custom_request)
             if custom_request.status not in {
@@ -621,20 +529,11 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
                 CustomRequest.Status.REVIEWING,
             }:
                 raise ValidationError("This commission cannot be progressed now.")
->>>>>>> origin/group_code
             try:
                 progress = int(request.data.get("progress", custom_request.progress))
             except (TypeError, ValueError) as exc:
                 raise ValidationError({"progress": "Progress must be a number."}) from exc
             status_value = request.data.get("status", custom_request.status)
-<<<<<<< HEAD
-            if status_value == "open":
-                status_value = CustomRequest.Status.SUBMITTED
-            if not 0 <= progress <= 100:
-                raise ValidationError({"progress": "Progress must be between 0 and 100."})
-            if status_value not in CustomRequest.Status.values:
-                raise ValidationError({"status": "Invalid commission status."})
-=======
             if not 0 <= progress <= 100:
                 raise ValidationError({"progress": "Progress must be between 0 and 100."})
             allowed_statuses = {
@@ -645,7 +544,6 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
             }
             if status_value not in allowed_statuses:
                 raise ValidationError({"status": "Invalid commission status transition."})
->>>>>>> origin/group_code
             custom_request.progress = progress
             custom_request.status = status_value
             custom_request.save(update_fields=["progress", "status", "updated_at"])

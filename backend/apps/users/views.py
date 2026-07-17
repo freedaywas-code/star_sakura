@@ -1,31 +1,15 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
-<<<<<<< HEAD
-from django.db.models import Q
-from rest_framework import mixins, permissions, status, viewsets
-from rest_framework.decorators import action
-from rest_framework.exceptions import AuthenticationFailed
-=======
 from django.db import transaction
 from django.db.models import BooleanField, Case, Count, Exists, F, IntegerField, Max, OuterRef, Q, Value, When
 from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import AuthenticationFailed, NotFound, ValidationError
->>>>>>> origin/group_code
 from rest_framework.generics import CreateAPIView, RetrieveUpdateAPIView
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-<<<<<<< HEAD
-from common.response import ApiResponseMixin, ok
-
-from .permissions import IsAdmin
-from .serializers import AdminUserSerializer, ChangePasswordSerializer, RegisterSerializer, UserSerializer
-
-
-User = get_user_model()
-=======
 from common.pagination import StandardResultsSetPagination
 from common.response import ApiResponseMixin, fail, ok
 
@@ -140,7 +124,6 @@ def _pagination_data(paginator, results):
         "previous": paginator.get_previous_link(),
         "results": results,
     }
->>>>>>> origin/group_code
 
 
 class RegisterView(ApiResponseMixin, CreateAPIView):
@@ -203,8 +186,6 @@ class ChangePasswordView(ApiResponseMixin, APIView):
         return ok(None, message="password updated", status=status.HTTP_200_OK)
 
 
-<<<<<<< HEAD
-=======
 class PublicProfileView(ApiResponseMixin, APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -463,7 +444,6 @@ class MarkMessagesReadView(ApiResponseMixin, APIView):
         )
 
 
->>>>>>> origin/group_code
 class UserViewSet(ApiResponseMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     queryset = User.objects.all().order_by("-date_joined")
     permission_classes = [permissions.IsAuthenticated]
