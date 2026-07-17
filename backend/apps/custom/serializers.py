@@ -1,5 +1,10 @@
 from decimal import Decimal, InvalidOperation
 
+<<<<<<< HEAD
+from rest_framework import serializers
+
+from .models import CommissionOption, CustomRequest
+=======
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
@@ -108,12 +113,15 @@ class CommissionInvitationCreateSerializer(serializers.Serializer):
 class CommissionInvitationResponseSerializer(serializers.Serializer):
     invitation_id = serializers.IntegerField(min_value=1)
     decision = serializers.ChoiceField(choices=["accept", "decline"])
+>>>>>>> origin/group_code
 
 
 class CustomRequestSerializer(serializers.ModelSerializer):
     requester_username = serializers.CharField(source="requester.username", read_only=True)
     artist_username = serializers.CharField(source="artist.username", read_only=True)
     budget = serializers.CharField(required=False, allow_blank=True)
+<<<<<<< HEAD
+=======
     agreed_price = serializers.SerializerMethodField()
     bid_count = serializers.SerializerMethodField()
     bids = serializers.SerializerMethodField()
@@ -121,6 +129,7 @@ class CustomRequestSerializer(serializers.ModelSerializer):
     my_bid = serializers.SerializerMethodField()
     my_invitation = serializers.SerializerMethodField()
     selected_bid = serializers.SerializerMethodField()
+>>>>>>> origin/group_code
 
     class Meta:
         model = CustomRequest
@@ -139,6 +148,8 @@ class CustomRequestSerializer(serializers.ModelSerializer):
             "progress",
             "accepted_at",
             "abandon_requested_at",
+<<<<<<< HEAD
+=======
             "agreed_price",
             "bid_count",
             "bids",
@@ -146,6 +157,7 @@ class CustomRequestSerializer(serializers.ModelSerializer):
             "my_bid",
             "my_invitation",
             "selected_bid",
+>>>>>>> origin/group_code
             "created_at",
             "updated_at",
         ]
@@ -159,6 +171,8 @@ class CustomRequestSerializer(serializers.ModelSerializer):
             "progress",
             "accepted_at",
             "abandon_requested_at",
+<<<<<<< HEAD
+=======
             "agreed_price",
             "bid_count",
             "bids",
@@ -166,10 +180,13 @@ class CustomRequestSerializer(serializers.ModelSerializer):
             "my_bid",
             "my_invitation",
             "selected_bid",
+>>>>>>> origin/group_code
             "created_at",
             "updated_at",
         ]
 
+<<<<<<< HEAD
+=======
     def _request_user(self):
         request = self.context.get("request")
         user = getattr(request, "user", None)
@@ -219,12 +236,16 @@ class CustomRequestSerializer(serializers.ModelSerializer):
         instance._serializer_visible_invitations = (user.id, visible)
         return visible
 
+>>>>>>> origin/group_code
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["budget"] = instance.budget_note or str(instance.budget)
         data["status"] = "open" if instance.status == CustomRequest.Status.SUBMITTED else instance.status
         return data
 
+<<<<<<< HEAD
+    def _apply_budget(self, validated_data):
+=======
     def get_agreed_price(self, instance):
         user = self._request_user()
         if not user or not (
@@ -287,6 +308,7 @@ class CustomRequestSerializer(serializers.ModelSerializer):
     def _apply_budget(self, validated_data):
         if "budget" not in validated_data:
             return validated_data
+>>>>>>> origin/group_code
         budget_text = str(validated_data.pop("budget", "") or "").strip()
         validated_data["budget_note"] = budget_text
         try:

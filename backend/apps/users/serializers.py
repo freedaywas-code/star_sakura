@@ -6,8 +6,11 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+<<<<<<< HEAD
+=======
 from .models import DirectMessage, Follow
 
+>>>>>>> origin/group_code
 
 User = get_user_model()
 
@@ -24,6 +27,8 @@ class AdminUserSerializer(UserSerializer):
         read_only_fields = ["id"]
 
 
+<<<<<<< HEAD
+=======
 class PublicProfileSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
@@ -169,6 +174,7 @@ class DirectMessageCreateSerializer(serializers.Serializer):
         return value
 
 
+>>>>>>> origin/group_code
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
 
@@ -191,7 +197,10 @@ class RegisterSerializer(serializers.ModelSerializer):
             "gender": "",
             "birthday": "",
             "signature": "",
+<<<<<<< HEAD
+=======
             "homeTags": [],
+>>>>>>> origin/group_code
         }
         user.save()
         return user

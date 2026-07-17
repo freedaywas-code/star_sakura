@@ -14,6 +14,10 @@ const STORAGE = {
   authTokens: 'starSakuraAuthTokens'
 };
 const GALLERY_ITEMS_PER_PAGE = 8;
+<<<<<<< HEAD
+let galleryCurrentPage = 1;
+let galleryPaginationObserver = null;
+=======
 const GALLERY_API_PAGE_SIZE = 24;
 let galleryCurrentPage = 1;
 let galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
@@ -22,10 +26,15 @@ let galleryInfiniteObserver = null;
 let galleryApiPage = 1;
 let galleryApiHasMore = false;
 let galleryApiLoading = false;
+>>>>>>> origin/group_code
 const API_BASE = (() => {
   const override = new URLSearchParams(location.search).get('api') || localStorage.getItem('starSakuraApiBase');
   if (override) return override.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
   if (location.protocol === 'file:') return 'http://127.0.0.1:8000/api';
+<<<<<<< HEAD
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return 'http://127.0.0.1:8000/api';
+=======
+>>>>>>> origin/group_code
   return `${location.origin}/api`;
 })();
 let currentUser = JSON.parse(localStorage.getItem(STORAGE.currentUser) || 'null');
@@ -35,6 +44,8 @@ let commentImageSrc = '';
 let editingCommissionId = '';
 let commissionCache = [];
 let commissionOptionsCache = [];
+<<<<<<< HEAD
+=======
 let activeCommissionDetailId = '';
 let commissionDetailBids = [];
 let commissionDetailInvitations = [];
@@ -48,6 +59,7 @@ let commissionArtistResults = [];
 let commissionSelectedArtist = null;
 let commissionArtistSearchQuery = '';
 let commissionArtistSearchError = '';
+>>>>>>> origin/group_code
 let editingSkills = [];
 let artworkCommentSyncTimer = null;
 let artworkCommentSyncBusy = false;
@@ -66,14 +78,69 @@ function apiHeaders(extra = {}, withAuth = true) {
   return headers;
 }
 
+<<<<<<< HEAD
+async function refreshToken() {
+  const tokens = JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}');
+  if (!tokens.refresh) return null;
+  
+  try {
+    const response = await fetch(`${API_BASE}/users/token/refresh/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh: tokens.refresh })
+    });
+    const payload = await response.json();
+    if (!response.ok) return null;
+    
+    const newTokens = { ...tokens, access: payload.access };
+    localStorage.setItem(STORAGE.authTokens, JSON.stringify(newTokens));
+    
+    const userResponse = await fetch(`${API_BASE}/users/me/`, {
+      headers: { Authorization: `Bearer ${payload.access}` }
+    });
+    if (userResponse.ok) {
+      const user = await userResponse.json();
+      currentUser = { ...user, access: payload.access };
+      localStorage.setItem(STORAGE.currentUser, JSON.stringify(currentUser));
+    }
+    
+    return payload.access;
+  } catch {
+    return null;
+  }
+}
+
+async function apiRequest(path, options = {}, retryCount = 0) {
+  const method = String(options.method || 'GET').toUpperCase();
+=======
 async function apiRequest(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
   const forceAuth = options.auth === true;
+>>>>>>> origin/group_code
   const skipAuth = [
     '/users/login/',
     '/users/register/',
     '/users/token/refresh/',
   ].includes(path) || options.auth === false;
+<<<<<<< HEAD
+  const isPublicRead = method === 'GET' && /^\/(artworks|custom|reviews|inspirations)\//.test(path);
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    method,
+    headers: apiHeaders(options.headers || {}, !skipAuth && !isPublicRead)
+  });
+  const payload = await response.json().catch(() => ({}));
+  
+  if (response.status === 401 && !skipAuth && !isPublicRead && retryCount === 0) {
+    const newToken = await refreshToken();
+    if (newToken) {
+      return apiRequest(path, options, 1);
+    }
+    clearSession();
+  }
+  
+  if (!response.ok) throw new Error(payload.message || '请求失败');
+=======
   const isPublicRead = method === 'GET' && /^\/(artworks|custom|reviews|inspirations|users\/profiles)\//.test(path);
   const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
   const response = await fetch(`${API_BASE}${path}`, {
@@ -99,6 +166,7 @@ async function apiRequest(path, options = {}) {
     error.data = payload.data;
     throw error;
   }
+>>>>>>> origin/group_code
   return payload.data ?? payload;
 }
 
@@ -111,7 +179,15 @@ function apiList(data) {
 
 function normalizeImageSrc(src = '') {
   if (!src) return '';
+<<<<<<< HEAD
+  if (/^(data:|https?:|blob:)/.test(src)) return src;
+  if (src.startsWith('/media/')) {
+    return 'http://127.0.0.1:8000' + src;
+  }
+  if (src.startsWith('/')) return src;
+=======
   if (/^(data:|https?:|blob:|\/)/.test(src)) return src;
+>>>>>>> origin/group_code
   return `/${src.replace(/^\/+/, '')}`;
 }
 
@@ -126,9 +202,13 @@ function artworkToCardData(item) {
     reviewsCount: item.reviews_count || 0,
     name: item.title,
     tag,
+<<<<<<< HEAD
+    imageSrc: normalizeImageSrc(item.image_url || item.image || '')
+=======
     imageSrc: normalizeImageSrc(item.image_url || item.image || ''),
     recommendationScore: item.recommendation_score || 0,
     matchedTags: Array.isArray(item.matched_tags) ? item.matched_tags : []
+>>>>>>> origin/group_code
   };
 }
 
@@ -180,6 +260,8 @@ function artworkMatchesCard(item, card) {
     && String(item.category || '').trim() === String(data.tag || '').trim();
 }
 
+<<<<<<< HEAD
+=======
 function artworkIdsFromInteractionKeys(keys = []) {
   return (keys || []).reduce((result, key) => {
     const [type, id] = String(key).split(':');
@@ -266,6 +348,7 @@ function sortGalleryDataByRecommendation(items = []) {
   });
 }
 
+>>>>>>> origin/group_code
 async function ensureArtworkRecords() {
   let items = [];
   try {
@@ -360,6 +443,12 @@ function getSkills(user) {
     : [];
 }
 
+<<<<<<< HEAD
+function setAvatarElement(element, avatarSrc, fallbackName) {
+  if (!element) return;
+  if (avatarSrc) {
+    element.innerHTML = `<img src="${avatarSrc}" alt="${escapeHTML(fallbackName)}">`;
+=======
 function splitRecommendationTags(value = '') {
   const raw = Array.isArray(value) ? value.join(',') : String(value || '');
   const seen = new Set();
@@ -394,6 +483,7 @@ function setAvatarElement(element, avatarSrc, fallbackName) {
     image.src = normalizeImageSrc(String(avatarSrc));
     image.alt = String(fallbackName || '头像');
     element.appendChild(image);
+>>>>>>> origin/group_code
   } else {
     element.textContent = (fallbackName || '我').trim().slice(0, 1).toUpperCase() || '我';
   }
@@ -525,10 +615,13 @@ function defaultInteractionState() {
   };
 }
 
+<<<<<<< HEAD
+=======
 function defaultUserInteractionBucket() {
   return { liked: [], favorites: [], history: [], views: {} };
 }
 
+>>>>>>> origin/group_code
 function getInteractions() {
   const raw = JSON.parse(localStorage.getItem(STORAGE.interactions) || 'null');
   const state = { ...defaultInteractionState(), ...(raw || {}) };
@@ -536,6 +629,9 @@ function getInteractions() {
   state.inspiration = { ...defaultInteractionState().inspiration, ...(state.inspiration || {}) };
   state.users = state.users || {};
   if (currentUser?.username && !state.users[currentUser.username]) {
+<<<<<<< HEAD
+    state.users[currentUser.username] = { liked: [], favorites: [], history: [] };
+=======
     state.users[currentUser.username] = defaultUserInteractionBucket();
   }
   if (currentUser?.username) {
@@ -544,6 +640,7 @@ function getInteractions() {
       ...(state.users[currentUser.username] || {}),
       views: state.users[currentUser.username]?.views || {}
     };
+>>>>>>> origin/group_code
   }
   return state;
 }
@@ -558,11 +655,15 @@ function interactionKey(type, id) {
 
 function getUserInteractionBucket(state = getInteractions()) {
   if (!currentUser?.username) return null;
+<<<<<<< HEAD
+  state.users[currentUser.username] ||= { liked: [], favorites: [], history: [] };
+=======
   state.users[currentUser.username] = {
     ...defaultUserInteractionBucket(),
     ...(state.users[currentUser.username] || {}),
     views: state.users[currentUser.username]?.views || {}
   };
+>>>>>>> origin/group_code
   return state.users[currentUser.username];
 }
 
@@ -594,7 +695,10 @@ function addUserHistory(type, id) {
   const bucket = getUserInteractionBucket(state);
   const key = interactionKey(type, id);
   bucket.history = [key, ...bucket.history.filter(item => item !== key)].slice(0, 60);
+<<<<<<< HEAD
+=======
   bucket.views[key] = Number(bucket.views[key] || 0) + 1;
+>>>>>>> origin/group_code
   saveInteractions(state);
 }
 
@@ -937,7 +1041,11 @@ async function renderArtworkComments(cardId) {
       <div class="comment-item">
         <div class="comment-avatar">${avatarHtml}</div>
         <div class="comment-bubble">
+<<<<<<< HEAD
+          <div class="comment-author">${escapeHTML(name)}</div>
+=======
           <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(username)}">${escapeHTML(name)}</button>
+>>>>>>> origin/group_code
           <div class="comment-text">${escapeHTML(item.content || item.text || '')}</div>
           ${imageHtml}
           <div class="comment-time">${escapeHTML(item.created_at || item.createdAt || '')}</div>
@@ -1152,7 +1260,10 @@ function createGalleryCard(data) {
   card.dataset.original = String(data.original || false);
   card.dataset.reviewsCount = String(data.reviewsCount || data.reviews_count || 0);
   card.dataset.saved = String(data.saved === true);
+<<<<<<< HEAD
+=======
   card.dataset.recommendationScore = String(data.recommendationScore || data.recommendation_score || 0);
+>>>>>>> origin/group_code
   const src = normalizeImageSrc(data.imageSrc || data.image_url || data.image || '');
   const imageHtml = src ? `<img src="${escapeHTML(src)}" alt="${escapeHTML(data.name)}">` : '';
   card.innerHTML = `
@@ -1165,7 +1276,10 @@ function createGalleryCard(data) {
     <div class="character-info">
       <h3 onclick="editName(this)">${escapeHTML(data.name)}</h3>
       <span class="character-tag" onclick="editTag(this)">${escapeHTML(data.tag)}</span>
+<<<<<<< HEAD
+=======
       <button class="character-owner user-profile-link" type="button" data-user-profile="${escapeHTML(data.owner || 'admin')}">@${escapeHTML(data.owner || 'admin')}</button>
+>>>>>>> origin/group_code
     </div>
   `;
   grid.appendChild(card);
@@ -1184,6 +1298,41 @@ function renderGalleryPagination() {
   const pagination = document.getElementById('galleryPagination');
   if (!grid || !pagination) return;
   const cards = getGalleryCards();
+<<<<<<< HEAD
+  const totalPages = Math.max(1, Math.ceil(cards.length / GALLERY_ITEMS_PER_PAGE));
+  galleryCurrentPage = Math.min(Math.max(1, galleryCurrentPage), totalPages);
+  const start = (galleryCurrentPage - 1) * GALLERY_ITEMS_PER_PAGE;
+  const end = start + GALLERY_ITEMS_PER_PAGE;
+  cards.forEach((card, index) => {
+    card.hidden = index < start || index >= end;
+  });
+  if (cards.length <= GALLERY_ITEMS_PER_PAGE) {
+    pagination.innerHTML = '';
+    pagination.hidden = true;
+    return;
+  }
+  pagination.hidden = false;
+  const pageButtons = Array.from({ length: totalPages }, (_, index) => {
+    const page = index + 1;
+    return `<button type="button" class="gallery-page-btn${page === galleryCurrentPage ? ' active' : ''}" data-gallery-page="${page}" aria-label="第 ${page} 页">${page}</button>`;
+  }).join('');
+  pagination.innerHTML = `
+    <button type="button" class="gallery-page-btn" data-gallery-page="prev" ${galleryCurrentPage === 1 ? 'disabled' : ''}>上一页</button>
+    ${pageButtons}
+    <span class="gallery-page-info">${galleryCurrentPage} / ${totalPages}</span>
+    <button type="button" class="gallery-page-btn" data-gallery-page="next" ${galleryCurrentPage === totalPages ? 'disabled' : ''}>下一页</button>
+  `;
+  pagination.querySelectorAll('[data-gallery-page]').forEach(button => {
+    button.addEventListener('click', () => {
+      const action = button.dataset.galleryPage;
+      if (action === 'prev') galleryCurrentPage -= 1;
+      else if (action === 'next') galleryCurrentPage += 1;
+      else galleryCurrentPage = Number(action) || 1;
+      renderGalleryPagination();
+      document.getElementById('gallery')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+=======
   galleryVisibleCount = Math.min(Math.max(GALLERY_ITEMS_PER_PAGE, galleryVisibleCount), Math.max(cards.length, GALLERY_ITEMS_PER_PAGE));
   cards.forEach((card, index) => {
     card.hidden = index >= galleryVisibleCount;
@@ -1203,6 +1352,7 @@ function renderGalleryPagination() {
     <span class="gallery-page-info">${text}</span>
   `;
   pagination.querySelector('[data-gallery-load-more]')?.addEventListener('click', loadMoreGalleryItems);
+>>>>>>> origin/group_code
 }
 
 function initGalleryPaginationObserver() {
@@ -1213,6 +1363,8 @@ function initGalleryPaginationObserver() {
   });
   galleryPaginationObserver.observe(grid, { childList: true });
   renderGalleryPagination();
+<<<<<<< HEAD
+=======
   const pagination = document.getElementById('galleryPagination');
   if ('IntersectionObserver' in window && pagination && !galleryInfiniteObserver) {
     galleryInfiniteObserver = new IntersectionObserver(entries => {
@@ -1233,6 +1385,7 @@ async function loadMoreGalleryItems() {
   if (galleryApiHasMore) {
     await appendGalleryFromApi();
   }
+>>>>>>> origin/group_code
 }
 
 async function savePublishForm() {
@@ -1535,8 +1688,12 @@ function serializeGallery() {
       owner: card.dataset.owner || 'admin',
       original: card.dataset.original === 'true',
       saved: card.dataset.saved === 'true',
+<<<<<<< HEAD
+      reviewsCount: Number(card.dataset.reviewsCount || 0)
+=======
       reviewsCount: Number(card.dataset.reviewsCount || 0),
       recommendationScore: Number(card.dataset.recommendationScore || 0)
+>>>>>>> origin/group_code
     };
   });
 }
@@ -1550,6 +1707,15 @@ function saveGallery(showAlert = true) {
 
 async function loadGalleryFromApi() {
   try {
+<<<<<<< HEAD
+    const items = apiList(await apiRequest('/artworks/?page_size=100&ordering=created_at'));
+    const grid = document.getElementById('galleryGrid');
+    grid.innerHTML = '';
+    items.forEach(item => createGalleryCard(artworkToCardData(item)));
+    cardIdCounter = Math.max(10, ...items.map(item => Number(item.id)).filter(Boolean)) + 1;
+    localStorage.removeItem(STORAGE.gallery);
+    renderMePage();
+=======
     galleryApiPage = 1;
     galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
     const { items, hasMore } = await fetchRecommendedArtworkPage(galleryApiPage);
@@ -1562,6 +1728,7 @@ async function loadGalleryFromApi() {
     localStorage.removeItem(STORAGE.gallery);
     renderMePage();
     renderGalleryPagination();
+>>>>>>> origin/group_code
     return true;
   } catch (error) {
     console.warn('Artwork API load failed, falling back to local gallery:', error);
@@ -1569,6 +1736,8 @@ async function loadGalleryFromApi() {
   }
 }
 
+<<<<<<< HEAD
+=======
 async function fetchRecommendedArtworkPage(page = 1) {
   const data = await apiRequest(`/artworks/recommendations/?page=${page}&page_size=${GALLERY_API_PAGE_SIZE}`, {
     method: 'POST',
@@ -1617,6 +1786,7 @@ async function refreshGalleryRecommendations() {
   renderGalleryPagination();
 }
 
+>>>>>>> origin/group_code
 function loadGallery() {
   const savedData = localStorage.getItem(STORAGE.gallery);
   if (!savedData) return;
@@ -1632,10 +1802,14 @@ function loadGallery() {
       'linear-gradient(135deg, #d4f9e6, #b8f0d4)',
       'linear-gradient(135deg, #f9d4e6, #f0b8d4)'
     ];
+<<<<<<< HEAD
+    galleryData.forEach((data, index) => {
+=======
     galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
     galleryApiHasMore = false;
     const behaviorWeights = buildBehaviorTagWeights(galleryData);
     sortGalleryDataByRecommendation(galleryData).forEach((data, index) => {
+>>>>>>> origin/group_code
       const card = document.createElement('div');
       card.className = 'character-card fade-in visible';
       card.dataset.id = String(data.id);
@@ -1643,7 +1817,10 @@ function loadGallery() {
       card.dataset.original = String(data.original ?? ORIGINAL_CARD_IDS.has(String(data.id)));
       card.dataset.saved = String(data.saved === true);
       card.dataset.reviewsCount = String(data.reviewsCount || 0);
+<<<<<<< HEAD
+=======
       card.dataset.recommendationScore = String(scoreLocalArtwork(data, behaviorWeights) || 0);
+>>>>>>> origin/group_code
       const imageSrc = normalizeImageSrc(data.imageSrc || '');
       const imageHtml = imageSrc ? `<img src="${escapeHTML(imageSrc)}" alt="${escapeHTML(data.name)}">` : '';
       card.innerHTML = `
@@ -1658,7 +1835,10 @@ function loadGallery() {
         <div class="character-info">
           <h3 onclick="editName(this)">${escapeHTML(data.name)}</h3>
           <span class="character-tag" onclick="editTag(this)">${escapeHTML(data.tag)}</span>
+<<<<<<< HEAD
+=======
           <button class="character-owner user-profile-link" type="button" data-user-profile="${escapeHTML(data.owner || 'admin')}">@${escapeHTML(data.owner || 'admin')}</button>
+>>>>>>> origin/group_code
         </div>
       `;
       grid.appendChild(card);
@@ -1666,7 +1846,10 @@ function loadGallery() {
     normalizeCardActions();
     normalizeCommentButtons();
     cardIdCounter = Math.max(10, ...galleryData.map(d => parseInt(d.id, 10)).filter(Boolean)) + 1;
+<<<<<<< HEAD
+=======
     renderGalleryPagination();
+>>>>>>> origin/group_code
   } catch (e) {
     console.error('加载画廊数据失败:', e);
   }
@@ -1679,8 +1862,12 @@ function renderInspirations() {
   const items = getInspirations();
   const html = items.map(item => `
     <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
+<<<<<<< HEAD
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+=======
       <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))}</span>
       <button class="blog-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner)}">@${escapeHTML(item.owner)}</button>
+>>>>>>> origin/group_code
       <h3>${escapeHTML(item.title)}</h3>
       <p>${escapeHTML(item.content)}</p>
       <div class="blog-tags">
@@ -1818,10 +2005,13 @@ function renderMePage() {
   document.getElementById('profileCreativeYearsInput').value = profile.creativeYears || '';
   document.getElementById('profileSignature').value = signature;
   document.getElementById('profilePhilosophy').value = philosophy;
+<<<<<<< HEAD
+=======
   const homeTags = getHomeTags(user);
   const homeTagsInput = document.getElementById('profileHomeTags');
   if (homeTagsInput) homeTagsInput.value = homeTags.join('、');
   renderHomeTagPreview('profileHomeTagList', homeTags);
+>>>>>>> origin/group_code
   document.getElementById('resetEmail').value = user.email || '';
 
   const avatar = document.getElementById('profileAvatar');
@@ -2232,6 +2422,20 @@ function commissionToApiPayload(item) {
 
 async function migrateLegacyCommissionsToApi() {
   if (localStorage.getItem('starSakuraCommissionsMigrated') === 'true') return;
+<<<<<<< HEAD
+  const legacy = JSON.parse(localStorage.getItem(STORAGE.commissions) || '[]').map(normalizeCommissionItem);
+  if (!legacy.length) {
+    localStorage.setItem('starSakuraCommissionsMigrated', 'true');
+    return;
+  }
+  for (const item of legacy) {
+    await apiRequest('/custom/', {
+      method: 'POST',
+      body: JSON.stringify(commissionToApiPayload(item))
+    });
+  }
+  localStorage.setItem('starSakuraCommissionsMigrated', 'true');
+=======
   if (!currentUser) return;
   if (!commissionMigrationPromise) {
     commissionMigrationPromise = (async () => {
@@ -2248,6 +2452,7 @@ async function migrateLegacyCommissionsToApi() {
     });
   }
   return commissionMigrationPromise;
+>>>>>>> origin/group_code
 }
 
 async function loadCommissionsFromApi() {
@@ -2482,7 +2687,10 @@ function normalizeProfile(profile = {}, username = '') {
     birthday: '',
     creativeYears: '',
     signature: '',
+<<<<<<< HEAD
+=======
     homeTags: [],
+>>>>>>> origin/group_code
     ...profile
   };
 }
@@ -2702,8 +2910,12 @@ renderInspirations = async function() {
   blogList.innerHTML = '';
   const html = getInspirations().map(item => `
     <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
+<<<<<<< HEAD
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+=======
       <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))}</span>
       <button class="blog-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner)}">@${escapeHTML(item.owner)}</button>
+>>>>>>> origin/group_code
       <h3>${escapeHTML(item.title)}</h3>
       <p>${escapeHTML(item.content)}</p>
       <div class="blog-tags">
@@ -2726,8 +2938,12 @@ renderInspirations = async function() {
   const items = getInspirations();
   blogList.innerHTML = items.length ? items.map(item => `
     <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
+<<<<<<< HEAD
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+=======
       <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))}</span>
       <button class="blog-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner)}">@${escapeHTML(item.owner)}</button>
+>>>>>>> origin/group_code
       <h3>${escapeHTML(item.title)}</h3>
       <p>${escapeHTML(item.content)}</p>
       <div class="blog-tags">
@@ -2812,7 +3028,11 @@ function renderInspirationCommentItem(item, isReply = false) {
     <div class="comment-item${isReply ? ' reply' : ''}">
       <div class="comment-avatar">${avatarHtml}</div>
       <div class="comment-bubble">
+<<<<<<< HEAD
+        <div class="comment-author">${escapeHTML(name)}</div>
+=======
         <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.reviewer || '')}">${escapeHTML(name)}</button>
+>>>>>>> origin/group_code
         <div class="comment-text">${escapeHTML(item.content)}</div>
         <div class="comment-time">${escapeHTML(item.createdAt)}</div>
         <button class="comment-like${likedClass}" type="button" onclick="toggleInspirationCommentLike('${escapeHTML(item.id)}')">赞 ${item.likeCount}</button>
@@ -2894,11 +3114,15 @@ async function openInspirationDetail(inspirationId) {
   inspirationReplyTarget = '';
   document.getElementById('inspirationDetailTitle').textContent = item.title;
   document.getElementById('inspirationDetailTag').textContent = item.tag || '灵感';
+<<<<<<< HEAD
+  document.getElementById('inspirationDetailOwner').textContent = item.owner ? `作者：${item.owner}` : '';
+=======
   const inspirationOwner = document.getElementById('inspirationDetailOwner');
   inspirationOwner.textContent = item.owner ? `作者：${item.owner}` : '';
   inspirationOwner.classList.toggle('user-profile-link', !!item.owner);
   if (item.owner) inspirationOwner.dataset.userProfile = item.owner;
   else delete inspirationOwner.dataset.userProfile;
+>>>>>>> origin/group_code
   document.getElementById('inspirationDetailDate').textContent = getInspirationDisplayTime(item) ? `时间：${getInspirationDisplayTime(item)}` : '';
   document.getElementById('inspirationDetailContent').textContent = item.content;
   document.getElementById('inspirationCommentId').value = activeInspirationId;
@@ -3322,7 +3546,11 @@ function renderSearchCard(result) {
         </div>
         <p class="search-result-desc">${escapeHTML(item.name)} 是由 @${escapeHTML(item.owner || 'admin')} 发布的作品。</p>
         <div class="search-result-meta">
+<<<<<<< HEAD
+          <span>作者 @${escapeHTML(item.owner || 'admin')}</span>
+=======
           <button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner || 'admin')}">作者 @${escapeHTML(item.owner || 'admin')}</button>
+>>>>>>> origin/group_code
           <span>评价 ${Number(item.reviewsCount || 0)} 条</span>
         </div>
         <div class="search-result-tags"><span>${escapeHTML(item.tag || '原创作品')}</span></div>
@@ -3339,8 +3567,13 @@ function renderSearchCard(result) {
         </div>
         <p class="search-result-desc">${escapeHTML(item.description || '暂无需求说明')}</p>
         <div class="search-result-meta">
+<<<<<<< HEAD
+          <span>发布者 @${escapeHTML(item.requester || 'admin')}</span>
+          <span>接单者 ${escapeHTML(item.artist || '暂未接单')}</span>
+=======
           <button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.requester || 'admin')}">发布者 @${escapeHTML(item.requester || 'admin')}</button>
           ${item.artist ? `<button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.artist)}">接单者 @${escapeHTML(item.artist)}</button>` : '<span>接单者 暂未接单</span>'}
+>>>>>>> origin/group_code
           <span>${escapeHTML(item.createdAt || '')}</span>
         </div>
         <div class="search-result-tags">
@@ -3360,7 +3593,11 @@ function renderSearchCard(result) {
       </div>
       <p class="search-result-desc">${escapeHTML(item.content || '暂无内容')}</p>
       <div class="search-result-meta">
+<<<<<<< HEAD
+        <span>作者 @${escapeHTML(item.owner || 'admin')}</span>
+=======
         <button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner || 'admin')}">作者 @${escapeHTML(item.owner || 'admin')}</button>
+>>>>>>> origin/group_code
         <span>${escapeHTML(getInspirationDisplayTime(item) || '')}</span>
       </div>
       <div class="search-result-tags"><span>${escapeHTML(item.tag || '灵感')}</span></div>
@@ -3434,7 +3671,11 @@ function focusGallerySearchResult(artworkId) {
   const cards = getGalleryCards();
   const index = cards.findIndex(card => String(card.dataset.id) === String(artworkId));
   if (index >= 0) {
+<<<<<<< HEAD
+    galleryCurrentPage = Math.floor(index / GALLERY_ITEMS_PER_PAGE) + 1;
+=======
     galleryVisibleCount = Math.max(galleryVisibleCount, index + 1);
+>>>>>>> origin/group_code
     renderGalleryPagination();
     window.setTimeout(() => {
       const card = getGalleryCard(artworkId);
@@ -3467,9 +3708,12 @@ function openCommissionDetail(commissionId) {
 
 function closeCommissionDetail() {
   document.getElementById('commissionDetail')?.classList.add('hidden');
+<<<<<<< HEAD
+=======
   activeCommissionDetailId = '';
   commissionDetailRequestToken += 1;
   clearTimeout(commissionArtistSearchTimer);
+>>>>>>> origin/group_code
 }
 
 function openSearchResult(type, id) {
@@ -3562,6 +3806,8 @@ document.getElementById('commissionDetail')?.addEventListener('click', event => 
   if (event.target.id === 'commissionDetail') closeCommissionDetail();
 });
 
+<<<<<<< HEAD
+=======
 function normalizeCommissionBid(value) {
   if (!value) return null;
   const artistId = value.artistId || value.artist_id || value.artist || '';
@@ -4342,6 +4588,7 @@ async function respondCommissionInvitation(invitationId, decision) {
 
 document.getElementById('commissionDetailRefresh')?.addEventListener('click', refreshActiveCommissionDetail);
 
+>>>>>>> origin/group_code
 document.getElementById('publishImageBox').addEventListener('click', () => {
   document.getElementById('publishImageInput').click();
 });
@@ -4531,16 +4778,23 @@ document.getElementById('profileSkillInput').addEventListener('keydown', event =
   }
 });
 
+<<<<<<< HEAD
+document.getElementById('profileForm').addEventListener('submit', event => {
+=======
 document.getElementById('profileHomeTags')?.addEventListener('input', event => {
   renderHomeTagPreview('profileHomeTagList', splitRecommendationTags(event.target.value));
 });
 
 document.getElementById('profileForm').addEventListener('submit', async event => {
+>>>>>>> origin/group_code
   event.preventDefault();
   if (!requireLogin()) return;
   const users = getUsers();
   const user = users[currentUser.username];
+<<<<<<< HEAD
+=======
   const homeTags = splitRecommendationTags(document.getElementById('profileHomeTags')?.value || '');
+>>>>>>> origin/group_code
   user.profile = {
     ...user.profile,
     displayName: document.getElementById('profileDisplayNameInput').value.trim() || user.username,
@@ -4550,14 +4804,21 @@ document.getElementById('profileForm').addEventListener('submit', async event =>
     signature: document.getElementById('profileSignature').value.trim(),
     intro: document.getElementById('profileSignature').value.trim(),
     philosophy: document.getElementById('profilePhilosophy').value.trim(),
+<<<<<<< HEAD
+    skills: [...editingSkills]
+=======
     skills: [...editingSkills],
     homeTags
+>>>>>>> origin/group_code
   };
   saveUsers(users);
   alert('个人信息已保存。');
   refreshAuthUI();
   renderMePage();
+<<<<<<< HEAD
+=======
   await refreshGalleryRecommendations();
+>>>>>>> origin/group_code
 });
 
 document.getElementById('changeByOldPasswordBtn').addEventListener('click', () => {
@@ -4616,6 +4877,8 @@ document.getElementById('contactForm').addEventListener('submit', async event =>
   }
 }, true);
 
+<<<<<<< HEAD
+=======
 // ===== Public profiles and following =====
 let activePublicProfile = null;
 let publicProfileArtworks = [];
@@ -5546,6 +5809,7 @@ refreshAuthUI = function() {
   }
 };
 
+>>>>>>> origin/group_code
 const observer = new IntersectionObserver(entries => {
   entries.forEach(entry => {
     if (entry.isIntersecting) entry.target.classList.add('visible');
@@ -5582,3 +5846,428 @@ window.addEventListener('DOMContentLoaded', async () => {
   const normalizedInitialPage = initialPage === 'about' ? 'me' : initialPage;
   switchPage(document.getElementById(normalizedInitialPage)?.classList.contains('page-section') ? normalizedInitialPage : 'home');
 });
+<<<<<<< HEAD
+
+let currentChatConversationId = null;
+let isChatLoading = false;
+
+async function sendChatMessage(text) {
+  if (!text) {
+    text = document.getElementById('chatInput').value.trim();
+  }
+  if (!text || isChatLoading) return;
+  
+  document.getElementById('chatInput').value = '';
+  isChatLoading = true;
+  document.getElementById('chatSendBtn').disabled = true;
+  
+  const messagesContainer = document.getElementById('chatMessages');
+  const welcome = messagesContainer.querySelector('.chat-welcome');
+  if (welcome) {
+    welcome.remove();
+  }
+  
+  appendChatMessage('user', text);
+  
+  try {
+    await sendChatMessageStream(text);
+    await loadChatConversations();
+  } catch (error) {
+    appendChatMessage('ai', `抱歉，我暂时无法回复您的消息。${error.message || ''}`);
+    console.error('Chat error:', error);
+  } finally {
+    isChatLoading = false;
+    document.getElementById('chatSendBtn').disabled = false;
+  }
+}
+
+async function sendChatMessageStream(text, retryCount = 0) {
+  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  console.log('=== Chat Stream Request ===');
+  console.log('URL:', `${API_BASE}/recommend/chat/stream/`);
+  console.log('Headers:', headers);
+  console.log('Body:', JSON.stringify({ conversation_id: currentChatConversationId, content: text }));
+  console.log('Token exists:', !!token);
+  console.log('Retry count:', retryCount);
+  
+  const response = await fetch(`${API_BASE}/recommend/chat/stream/`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      conversation_id: currentChatConversationId,
+      content: text
+    })
+  });
+  
+  console.log('Response status:', response.status);
+  console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+  
+  if (response.status === 401 && retryCount === 0) {
+    const newToken = await refreshToken();
+    if (newToken) {
+      return sendChatMessageStream(text, 1);
+    }
+    clearSession();
+    throw new Error('登录已过期，请重新登录');
+  }
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: '请求失败' }));
+    throw new Error(error.message || '请求失败');
+  }
+  
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let aiMessageDiv = null;
+  let fullContent = '';
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop() || '';
+    
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      
+      const dataStr = line.slice(6);
+      if (dataStr === '[DONE]') continue;
+      
+      try {
+        const data = JSON.parse(dataStr);
+        
+        if (data.conversation_id) {
+          currentChatConversationId = data.conversation_id;
+        }
+        
+        if (data.content) {
+          fullContent += data.content;
+          if (!aiMessageDiv) {
+            aiMessageDiv = createAiMessage();
+          }
+          aiMessageDiv.querySelector('.msg-bubble').textContent += data.content;
+          document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+        }
+        
+        if (data.done && aiMessageDiv) {
+          if (data.artworks && Array.isArray(data.artworks) && data.artworks.length > 0) {
+            renderArtworkCardsDirectly(aiMessageDiv, data.artworks);
+          } else {
+            await renderArtworkCardsInMessage(aiMessageDiv, fullContent);
+          }
+          return;
+        }
+      } catch (e) {
+        console.warn('SSE parse error:', e);
+      }
+    }
+  }
+}
+
+function renderArtworkCardsDirectly(messageDiv, artworks) {
+  const bubble = messageDiv.querySelector('.msg-bubble');
+  let htmlContent = bubble.textContent;
+  
+  console.log('Artworks data:', artworks);
+  
+  const cardsHtml = artworks.map(artwork => {
+    let imgUrl = artwork.image_url || artwork.image || '';
+    if (imgUrl) {
+      if (imgUrl.startsWith('http://127.0.0.1:8000/media/')) {
+        imgUrl = imgUrl.replace('http://127.0.0.1:8000/media/', '/media/');
+      } else if (imgUrl.startsWith('http://127.0.0.1:8000/')) {
+        imgUrl = imgUrl.replace('http://127.0.0.1:8000/', '/');
+      } else if (imgUrl.startsWith('http')) {
+      } else if (!imgUrl.startsWith('/')) {
+        imgUrl = '/' + imgUrl;
+      }
+    }
+    console.log('Artwork:', artwork.title, '- Image URL:', imgUrl);
+    return `<div class="artwork-card" data-id="${artwork.id}" onclick="openArtworkById(${artwork.id})">
+      <div class="artwork-card-img-wrapper">
+        <img src="${imgUrl}" alt="${escapeHtml(artwork.title)}" class="artwork-card-img" onerror="this.style.display='none'; console.log('Image load failed:', this.src);">
+      </div>
+      <div class="artwork-card-info">
+        <div class="artwork-card-title">${escapeHtml(artwork.title)}</div>
+        <div class="artwork-card-category">${escapeHtml(artwork.category || '')}</div>
+        <div class="artwork-card-price">¥${artwork.price}</div>
+      </div>
+    </div>`;
+  }).join('');
+  
+  htmlContent = htmlContent.replace(/\n/g, '<br>') + '<div class="artwork-cards-container">' + cardsHtml + '</div>';
+  bubble.innerHTML = htmlContent;
+  
+  document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+}
+
+async function renderArtworkCardsInMessage(messageDiv, content) {
+  const artworkIds = [];
+  const regex = /\[作品:(\d+)\]/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    artworkIds.push(parseInt(match[1]));
+  }
+  
+  if (artworkIds.length === 0) return;
+  
+  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  try {
+    const response = await fetch(`${API_BASE}/artworks/?id__in=${artworkIds.join(',')}`, { headers });
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    const results = data.data || data;
+    const artworks = Array.isArray(results.results) ? results.results : (Array.isArray(results) ? results : []);
+    const artworkMap = {};
+    artworks.forEach(art => {
+      artworkMap[art.id] = art;
+    });
+    
+    const bubble = messageDiv.querySelector('.msg-bubble');
+    let htmlContent = content;
+    
+    htmlContent = htmlContent.replace(/\[作品:(\d+)\]/g, (_, id) => {
+          const artwork = artworkMap[parseInt(id)];
+          if (!artwork) return '';
+          
+          const imgUrl = normalizeImageSrc(artwork.image_url || artwork.image || '');
+          return `<div class="artwork-card" data-id="${artwork.id}" onclick="openArtworkById(${artwork.id})">
+        <div class="artwork-card-img-wrapper">
+          <img src="${imgUrl}" alt="${escapeHtml(artwork.title)}" class="artwork-card-img">
+        </div>
+        <div class="artwork-card-info">
+          <div class="artwork-card-title">${escapeHtml(artwork.title)}</div>
+          <div class="artwork-card-category">${escapeHtml(artwork.category || '')}</div>
+          <div class="artwork-card-price">¥${artwork.price}</div>
+        </div>
+      </div>`;
+        });
+    
+    htmlContent = htmlContent.replace(/\n/g, '<br>');
+    bubble.innerHTML = htmlContent;
+    
+  } catch (e) {
+    console.error('Failed to render artwork cards:', e);
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+async function openArtworkById(artworkId) {
+  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
+  const headers = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  try {
+    const response = await fetch(`${API_BASE}/artworks/${artworkId}/`, { headers });
+    if (!response.ok) return;
+    
+    const result = await response.json();
+    const artwork = result.data || result;
+    recordView('artwork', artworkId);
+    
+    document.getElementById('detailTitle').textContent = artwork.title;
+    document.getElementById('detailTag').textContent = artwork.category || '原创作品';
+    document.getElementById('detailImage').src = normalizeImageSrc(artwork.image_url || artwork.image || '');
+    document.getElementById('commentCardId').value = artworkId;
+    document.getElementById('commentText').value = '';
+    document.getElementById('commentImageInput').value = '';
+    document.getElementById('commentImageName').textContent = '';
+    commentImageSrc = '';
+    
+    renderArtworkComments(artworkId);
+    document.getElementById('artworkDetail').classList.remove('hidden');
+    startArtworkCommentSync();
+  } catch (e) {
+    console.error('Failed to open artwork:', e);
+  }
+}
+
+function createAiMessage() {
+  const messagesContainer = document.getElementById('chatMessages');
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'chat-message ai';
+  
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = '🤖';
+  
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.textContent = '';
+  
+  const time = document.createElement('div');
+  time.className = 'msg-time';
+  const now = new Date();
+  time.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  
+  messageDiv.appendChild(avatar);
+  messageDiv.appendChild(bubble);
+  messageDiv.appendChild(time);
+  
+  messagesContainer.appendChild(messageDiv);
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  
+  return messageDiv;
+}
+
+function appendChatMessage(role, content) {
+  const messagesContainer = document.getElementById('chatMessages');
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `chat-message ${role}`;
+  
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'user' ? '👤' : '🤖';
+  
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = content.replace(/\n/g, '<br>');
+  
+  const time = document.createElement('div');
+  time.className = 'msg-time';
+  const now = new Date();
+  time.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  
+  messageDiv.appendChild(avatar);
+  messageDiv.appendChild(bubble);
+  messageDiv.appendChild(time);
+  
+  messagesContainer.appendChild(messageDiv);
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+async function loadChatHistory(conversationId = null) {
+  const messagesContainer = document.getElementById('chatMessages');
+  messagesContainer.innerHTML = '';
+  
+  if (!conversationId) {
+    messagesContainer.innerHTML = `
+      <div class="chat-welcome">
+        <div class="welcome-icon">✨</div>
+        <h3>你好！我是星漫 AI 助手</h3>
+        <p>我可以帮你发现喜欢的画作和画师，有什么想聊的吗？</p>
+        <div class="welcome-suggestions">
+          <button type="button" onclick="sendChatMessage('帮我推荐一些二次元风格的画作')">推荐二次元风格画作</button>
+          <button type="button" onclick="sendChatMessage('有哪些擅长画古风的画师？')">找古风画师</button>
+          <button type="button" onclick="sendChatMessage('我想要定制一幅头像')">定制头像</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  
+  try {
+    const response = await apiRequest(`/recommend/chat/history/?conversation_id=${conversationId}`);
+    currentChatConversationId = conversationId;
+    
+    if (response.messages && response.messages.length > 0) {
+      response.messages.forEach(msg => {
+        appendChatMessage(msg.role, msg.content);
+      });
+    } else {
+      messagesContainer.innerHTML = `
+        <div class="chat-welcome">
+          <div class="welcome-icon">✨</div>
+          <h3>开始新的对话</h3>
+          <p>有什么我可以帮你的吗？</p>
+        </div>
+      `;
+    }
+  } catch (error) {
+    console.error('Load history error:', error);
+    messagesContainer.innerHTML = '<div class="empty-state">加载对话历史失败</div>';
+  }
+}
+
+async function newChatConversation() {
+  try {
+    const response = await apiRequest('/recommend/chat/new/', { method: 'POST', body: JSON.stringify({}) });
+    currentChatConversationId = response.conversation_id;
+    await loadChatHistory(currentChatConversationId);
+    await loadChatConversations();
+  } catch (error) {
+    console.error('New conversation error:', error);
+    alert('创建新对话失败');
+  }
+}
+
+async function clearChatHistory() {
+  if (!currentChatConversationId) return;
+  if (!confirm('确定要清空当前对话记录吗？')) return;
+  
+  try {
+    await apiRequest(`/recommend/chat/clear/?conversation_id=${currentChatConversationId}`, { method: 'POST' });
+    await loadChatHistory(currentChatConversationId);
+  } catch (error) {
+    console.error('Clear history error:', error);
+    alert('清空记录失败');
+  }
+}
+
+async function loadChatConversations() {
+  const listContainer = document.getElementById('chatConversationList');
+  
+  try {
+    const response = await apiRequest('/recommend/chat/conversations/');
+    
+    if (response.conversations && response.conversations.length > 0) {
+      listContainer.innerHTML = response.conversations.map(conv => `
+        <div class="chat-conversation-item ${conv.id === currentChatConversationId ? 'active' : ''}" 
+             onclick="loadChatHistory('${conv.id}')">
+          <div class="conv-title">${conv.title || '新对话'}</div>
+          <div class="conv-preview">${conv.last_message || '暂无消息'}</div>
+          <div class="conv-time">${formatTime(conv.updated_at)}</div>
+        </div>
+      `).join('');
+    } else {
+      listContainer.innerHTML = '<div class="empty-state">暂无对话</div>';
+    }
+  } catch (error) {
+    console.error('Load conversations error:', error);
+    listContainer.innerHTML = '<div class="empty-state">加载对话列表失败</div>';
+  }
+}
+
+function formatTime(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now - date;
+  
+  if (diff < 60000) return '刚刚';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+document.getElementById('chatInput')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
+=======
+>>>>>>> origin/group_code

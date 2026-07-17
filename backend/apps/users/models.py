@@ -1,5 +1,8 @@
 from django.contrib.auth.models import AbstractUser
+<<<<<<< HEAD
+=======
 from django.core.exceptions import ValidationError
+>>>>>>> origin/group_code
 from django.db import models
 
 
@@ -25,6 +28,8 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
+<<<<<<< HEAD
+=======
 
 
 class Follow(models.Model):
@@ -110,3 +115,4 @@ class DirectMessage(models.Model):
 
     def __str__(self):
         return f"{self.sender} -> {self.recipient}: {self.body[:30]}"
+>>>>>>> origin/group_code
