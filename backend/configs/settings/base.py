@@ -1,9 +1,6 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv()
-
 
 def env_bool(name, default=False):
     value = os.getenv(name)
@@ -49,7 +46,7 @@ INSTALLED_APPS = [
     "apps.custom",
     "apps.reviews",
     "apps.inspirations",
-    "apps.recommendations",
+    "apps.ai_assistant",
 ]
 
 MIDDLEWARE = [
@@ -166,6 +163,7 @@ REST_FRAMEWORK = {
         "user": os.getenv("DRF_USER_THROTTLE_RATE", "1200/min"),
         "login": os.getenv("DRF_LOGIN_THROTTLE_RATE", "10/min"),
         "write": os.getenv("DRF_WRITE_THROTTLE_RATE", "120/min"),
+        "ai_chat": os.getenv("DRF_AI_THROTTLE_RATE", "20/min"),
     },
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
 }
@@ -196,3 +194,10 @@ CSRF_COOKIE_HTTPONLY = env_bool("CSRF_COOKIE_HTTPONLY", False)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
+
+# OpenAI-compatible chat completion service. Keep AI_API_KEY in backend/.env.
+AI_API_KEY = os.getenv("AI_API_KEY", "")
+AI_API_BASE = os.getenv("AI_API_BASE", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
+AI_MODEL = os.getenv("AI_MODEL", "glm-4-flash")
+AI_VISION_MODEL = os.getenv("AI_VISION_MODEL", "glm-4.6v-flash")
+AI_REQUEST_TIMEOUT = env_int("AI_REQUEST_TIMEOUT", 45)

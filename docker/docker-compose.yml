@@ -29,7 +29,7 @@ services:
       context: ..
       dockerfile: backend/Dockerfile
     env_file:
-      - ../backend/.env.example
+      - ../backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: configs.settings.prod
       DJANGO_DEBUG: "false"

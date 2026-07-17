@@ -14,13 +14,18 @@ const STORAGE = {
   authTokens: 'starSakuraAuthTokens'
 };
 const GALLERY_ITEMS_PER_PAGE = 8;
+const GALLERY_API_PAGE_SIZE = 24;
 let galleryCurrentPage = 1;
+let galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
 let galleryPaginationObserver = null;
+let galleryInfiniteObserver = null;
+let galleryApiPage = 1;
+let galleryApiHasMore = false;
+let galleryApiLoading = false;
 const API_BASE = (() => {
   const override = new URLSearchParams(location.search).get('api') || localStorage.getItem('starSakuraApiBase');
   if (override) return override.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
   if (location.protocol === 'file:') return 'http://127.0.0.1:8000/api';
-  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return 'http://127.0.0.1:8000/api';
   return `${location.origin}/api`;
 })();
 let currentUser = JSON.parse(localStorage.getItem(STORAGE.currentUser) || 'null');
@@ -30,6 +35,19 @@ let commentImageSrc = '';
 let editingCommissionId = '';
 let commissionCache = [];
 let commissionOptionsCache = [];
+let activeCommissionDetailId = '';
+let commissionDetailBids = [];
+let commissionDetailInvitations = [];
+let commissionDetailRequestToken = 0;
+let commissionLoadPromise = null;
+let commissionMigrationPromise = null;
+let commissionActionBusy = false;
+let commissionArtistSearchTimer = null;
+let commissionArtistSearchToken = 0;
+let commissionArtistResults = [];
+let commissionSelectedArtist = null;
+let commissionArtistSearchQuery = '';
+let commissionArtistSearchError = '';
 let editingSkills = [];
 let artworkCommentSyncTimer = null;
 let artworkCommentSyncBusy = false;
@@ -48,61 +66,39 @@ function apiHeaders(extra = {}, withAuth = true) {
   return headers;
 }
 
-async function refreshToken() {
-  const tokens = JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}');
-  if (!tokens.refresh) return null;
-  
-  try {
-    const response = await fetch(`${API_BASE}/users/token/refresh/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh: tokens.refresh })
-    });
-    const payload = await response.json();
-    if (!response.ok) return null;
-    
-    const newTokens = { ...tokens, access: payload.access };
-    localStorage.setItem(STORAGE.authTokens, JSON.stringify(newTokens));
-    
-    const userResponse = await fetch(`${API_BASE}/users/me/`, {
-      headers: { Authorization: `Bearer ${payload.access}` }
-    });
-    if (userResponse.ok) {
-      const user = await userResponse.json();
-      currentUser = { ...user, access: payload.access };
-      localStorage.setItem(STORAGE.currentUser, JSON.stringify(currentUser));
-    }
-    
-    return payload.access;
-  } catch {
-    return null;
-  }
-}
-
-async function apiRequest(path, options = {}, retryCount = 0) {
+async function apiRequest(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
+  const forceAuth = options.auth === true;
   const skipAuth = [
     '/users/login/',
     '/users/register/',
     '/users/token/refresh/',
   ].includes(path) || options.auth === false;
-  const isPublicRead = method === 'GET' && /^\/(artworks|custom|reviews|inspirations)\//.test(path);
+  const isPublicRead = method === 'GET' && /^\/(artworks|custom|reviews|inspirations|users\/profiles)\//.test(path);
+  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     method,
-    headers: apiHeaders(options.headers || {}, !skipAuth && !isPublicRead)
+    headers: apiHeaders(options.headers || {}, !skipAuth && (forceAuth || !isPublicRead || !!token))
   });
   const payload = await response.json().catch(() => ({}));
-  
-  if (response.status === 401 && !skipAuth && !isPublicRead && retryCount === 0) {
-    const newToken = await refreshToken();
-    if (newToken) {
-      return apiRequest(path, options, 1);
-    }
-    clearSession();
+  if (response.status === 401 && !skipAuth && !isPublicRead) clearSession();
+  if (!response.ok) {
+    const detail = payload.message ?? payload.data ?? payload.detail;
+    const messages = [];
+    const collectMessages = value => {
+      if (value == null) return;
+      if (Array.isArray(value)) return value.forEach(collectMessages);
+      if (typeof value === 'object') return Object.values(value).forEach(collectMessages);
+      const text = String(value).trim();
+      if (text) messages.push(text);
+    };
+    collectMessages(detail);
+    const error = new Error(messages.join('；') || '请求失败');
+    error.status = response.status;
+    error.data = payload.data;
+    throw error;
   }
-  
-  if (!response.ok) throw new Error(payload.message || '请求失败');
   return payload.data ?? payload;
 }
 
@@ -115,11 +111,7 @@ function apiList(data) {
 
 function normalizeImageSrc(src = '') {
   if (!src) return '';
-  if (/^(data:|https?:|blob:)/.test(src)) return src;
-  if (src.startsWith('/media/')) {
-    return 'http://127.0.0.1:8000' + src;
-  }
-  if (src.startsWith('/')) return src;
+  if (/^(data:|https?:|blob:|\/)/.test(src)) return src;
   return `/${src.replace(/^\/+/, '')}`;
 }
 
@@ -134,7 +126,9 @@ function artworkToCardData(item) {
     reviewsCount: item.reviews_count || 0,
     name: item.title,
     tag,
-    imageSrc: normalizeImageSrc(item.image_url || item.image || '')
+    imageSrc: normalizeImageSrc(item.image_url || item.image || ''),
+    recommendationScore: item.recommendation_score || 0,
+    matchedTags: Array.isArray(item.matched_tags) ? item.matched_tags : []
   };
 }
 
@@ -184,6 +178,92 @@ function artworkMatchesCard(item, card) {
     && String(item.owner_username || '') === String(data.owner || '')
     && String(item.title || '').trim() === String(data.name || '').trim()
     && String(item.category || '').trim() === String(data.tag || '').trim();
+}
+
+function artworkIdsFromInteractionKeys(keys = []) {
+  return (keys || []).reduce((result, key) => {
+    const [type, id] = String(key).split(':');
+    if (type === 'artwork' && id) result[id] = (result[id] || 0) + 1;
+    return result;
+  }, {});
+}
+
+function userArtworkViews() {
+  const bucket = getUserInteractionBucket();
+  if (!bucket?.views) return {};
+  return Object.entries(bucket.views).reduce((result, [key, count]) => {
+    const [type, id] = String(key).split(':');
+    if (type === 'artwork' && id) result[id] = Number(count || 0);
+    return result;
+  }, {});
+}
+
+function buildArtworkRecommendationPayload() {
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state) || defaultUserInteractionBucket();
+  return {
+    tags: getHomeTags(),
+    views: userArtworkViews(),
+    likes: artworkIdsFromInteractionKeys(bucket.liked),
+    favorites: artworkIdsFromInteractionKeys(bucket.favorites),
+    comments: state.artwork?.comments || {},
+    history: (bucket.history || []).filter(key => String(key).startsWith('artwork:'))
+  };
+}
+
+function cardRecommendationTokens(item) {
+  return splitRecommendationTags([item.tag, item.name, item.owner].filter(Boolean).join(','));
+}
+
+function buildBehaviorTagWeights(items) {
+  const payload = buildArtworkRecommendationPayload();
+  const byId = new Map(items.map(item => [String(item.id), item]));
+  const weights = {};
+  const add = (id, amount) => {
+    const item = byId.get(String(id));
+    if (!item || amount <= 0) return;
+    splitRecommendationTags(item.tag).forEach(tag => {
+      const key = tag.toLowerCase();
+      weights[key] = (weights[key] || 0) + amount;
+    });
+  };
+  Object.entries(payload.views).forEach(([id, count]) => add(id, Math.min(Number(count || 0), 8)));
+  Object.entries(payload.likes).forEach(([id, count]) => add(id, Number(count || 0) * 4));
+  Object.entries(payload.favorites).forEach(([id, count]) => add(id, Number(count || 0) * 6));
+  payload.history.forEach((key, index) => add(key.split(':')[1], Math.max(0.5, 3 - index * 0.08)));
+  return weights;
+}
+
+function scoreLocalArtwork(item, behaviorWeights = {}) {
+  const payload = buildArtworkRecommendationPayload();
+  const tokens = new Set(cardRecommendationTokens(item).map(tag => tag.toLowerCase()));
+  const text = [item.name, item.tag, item.owner].join(' ').toLowerCase();
+  let score = 0;
+  payload.tags.forEach((tag, index) => {
+    const key = tag.toLowerCase();
+    const weight = Math.max(1, payload.tags.length - index);
+    if (tokens.has(key)) score += 16 * weight;
+    else if (text.includes(key)) score += 5 * weight;
+  });
+  Object.entries(behaviorWeights).forEach(([tag, weight]) => {
+    if (tokens.has(tag)) score += 5 * Math.log1p(weight);
+    else if (text.includes(tag)) score += 1.5 * Math.log1p(weight);
+  });
+  const counts = getInteractionCounts('artwork', item.id);
+  score += Math.log1p(counts.views) * 0.7;
+  score += Math.log1p(counts.likes) * 2.2;
+  score += Math.log1p(counts.favorites) * 3;
+  score += Math.log1p(counts.comments || item.reviewsCount || 0) * 1.4;
+  return score;
+}
+
+function sortGalleryDataByRecommendation(items = []) {
+  const behaviorWeights = buildBehaviorTagWeights(items);
+  return [...items].sort((a, b) => {
+    const diff = scoreLocalArtwork(b, behaviorWeights) - scoreLocalArtwork(a, behaviorWeights);
+    if (diff) return diff;
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
 }
 
 async function ensureArtworkRecords() {
@@ -280,10 +360,40 @@ function getSkills(user) {
     : [];
 }
 
+function splitRecommendationTags(value = '') {
+  const raw = Array.isArray(value) ? value.join(',') : String(value || '');
+  const seen = new Set();
+  return raw
+    .split(/[,，、/|#\s]+/)
+    .map(item => item.trim())
+    .filter(item => {
+      const key = item.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 20);
+}
+
+function getHomeTags(user = currentUser) {
+  return splitRecommendationTags(user?.profile?.homeTags || user?.profile?.recommendationTags || []);
+}
+
+function renderHomeTagPreview(targetId, tags) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  const safeTags = tags.length ? tags : ['暂未设置'];
+  target.innerHTML = safeTags.map(tag => `<span class="skill-pill">${escapeHTML(tag)}</span>`).join('');
+}
+
 function setAvatarElement(element, avatarSrc, fallbackName) {
   if (!element) return;
+  element.replaceChildren();
   if (avatarSrc) {
-    element.innerHTML = `<img src="${avatarSrc}" alt="${escapeHTML(fallbackName)}">`;
+    const image = document.createElement('img');
+    image.src = normalizeImageSrc(String(avatarSrc));
+    image.alt = String(fallbackName || '头像');
+    element.appendChild(image);
   } else {
     element.textContent = (fallbackName || '我').trim().slice(0, 1).toUpperCase() || '我';
   }
@@ -415,6 +525,10 @@ function defaultInteractionState() {
   };
 }
 
+function defaultUserInteractionBucket() {
+  return { liked: [], favorites: [], history: [], views: {} };
+}
+
 function getInteractions() {
   const raw = JSON.parse(localStorage.getItem(STORAGE.interactions) || 'null');
   const state = { ...defaultInteractionState(), ...(raw || {}) };
@@ -422,7 +536,14 @@ function getInteractions() {
   state.inspiration = { ...defaultInteractionState().inspiration, ...(state.inspiration || {}) };
   state.users = state.users || {};
   if (currentUser?.username && !state.users[currentUser.username]) {
-    state.users[currentUser.username] = { liked: [], favorites: [], history: [] };
+    state.users[currentUser.username] = defaultUserInteractionBucket();
+  }
+  if (currentUser?.username) {
+    state.users[currentUser.username] = {
+      ...defaultUserInteractionBucket(),
+      ...(state.users[currentUser.username] || {}),
+      views: state.users[currentUser.username]?.views || {}
+    };
   }
   return state;
 }
@@ -437,7 +558,11 @@ function interactionKey(type, id) {
 
 function getUserInteractionBucket(state = getInteractions()) {
   if (!currentUser?.username) return null;
-  state.users[currentUser.username] ||= { liked: [], favorites: [], history: [] };
+  state.users[currentUser.username] = {
+    ...defaultUserInteractionBucket(),
+    ...(state.users[currentUser.username] || {}),
+    views: state.users[currentUser.username]?.views || {}
+  };
   return state.users[currentUser.username];
 }
 
@@ -469,6 +594,7 @@ function addUserHistory(type, id) {
   const bucket = getUserInteractionBucket(state);
   const key = interactionKey(type, id);
   bucket.history = [key, ...bucket.history.filter(item => item !== key)].slice(0, 60);
+  bucket.views[key] = Number(bucket.views[key] || 0) + 1;
   saveInteractions(state);
 }
 
@@ -811,7 +937,7 @@ async function renderArtworkComments(cardId) {
       <div class="comment-item">
         <div class="comment-avatar">${avatarHtml}</div>
         <div class="comment-bubble">
-          <div class="comment-author">${escapeHTML(name)}</div>
+          <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(username)}">${escapeHTML(name)}</button>
           <div class="comment-text">${escapeHTML(item.content || item.text || '')}</div>
           ${imageHtml}
           <div class="comment-time">${escapeHTML(item.created_at || item.createdAt || '')}</div>
@@ -1026,6 +1152,7 @@ function createGalleryCard(data) {
   card.dataset.original = String(data.original || false);
   card.dataset.reviewsCount = String(data.reviewsCount || data.reviews_count || 0);
   card.dataset.saved = String(data.saved === true);
+  card.dataset.recommendationScore = String(data.recommendationScore || data.recommendation_score || 0);
   const src = normalizeImageSrc(data.imageSrc || data.image_url || data.image || '');
   const imageHtml = src ? `<img src="${escapeHTML(src)}" alt="${escapeHTML(data.name)}">` : '';
   card.innerHTML = `
@@ -1038,6 +1165,7 @@ function createGalleryCard(data) {
     <div class="character-info">
       <h3 onclick="editName(this)">${escapeHTML(data.name)}</h3>
       <span class="character-tag" onclick="editTag(this)">${escapeHTML(data.tag)}</span>
+      <button class="character-owner user-profile-link" type="button" data-user-profile="${escapeHTML(data.owner || 'admin')}">@${escapeHTML(data.owner || 'admin')}</button>
     </div>
   `;
   grid.appendChild(card);
@@ -1056,39 +1184,25 @@ function renderGalleryPagination() {
   const pagination = document.getElementById('galleryPagination');
   if (!grid || !pagination) return;
   const cards = getGalleryCards();
-  const totalPages = Math.max(1, Math.ceil(cards.length / GALLERY_ITEMS_PER_PAGE));
-  galleryCurrentPage = Math.min(Math.max(1, galleryCurrentPage), totalPages);
-  const start = (galleryCurrentPage - 1) * GALLERY_ITEMS_PER_PAGE;
-  const end = start + GALLERY_ITEMS_PER_PAGE;
+  galleryVisibleCount = Math.min(Math.max(GALLERY_ITEMS_PER_PAGE, galleryVisibleCount), Math.max(cards.length, GALLERY_ITEMS_PER_PAGE));
   cards.forEach((card, index) => {
-    card.hidden = index < start || index >= end;
+    card.hidden = index >= galleryVisibleCount;
   });
-  if (cards.length <= GALLERY_ITEMS_PER_PAGE) {
-    pagination.innerHTML = '';
-    pagination.hidden = true;
-    return;
-  }
   pagination.hidden = false;
-  const pageButtons = Array.from({ length: totalPages }, (_, index) => {
-    const page = index + 1;
-    return `<button type="button" class="gallery-page-btn${page === galleryCurrentPage ? ' active' : ''}" data-gallery-page="${page}" aria-label="第 ${page} 页">${page}</button>`;
-  }).join('');
+  const visible = Math.min(galleryVisibleCount, cards.length);
+  const hasHiddenCards = visible < cards.length;
+  const text = galleryApiLoading
+    ? '正在加载更多推荐...'
+    : hasHiddenCards || galleryApiHasMore
+      ? `继续上拉查看更多作品（${visible}/${galleryApiHasMore ? `${cards.length}+` : cards.length}）`
+      : cards.length
+        ? `已经看完当前推荐（${cards.length} 个作品）`
+        : '暂无作品';
   pagination.innerHTML = `
-    <button type="button" class="gallery-page-btn" data-gallery-page="prev" ${galleryCurrentPage === 1 ? 'disabled' : ''}>上一页</button>
-    ${pageButtons}
-    <span class="gallery-page-info">${galleryCurrentPage} / ${totalPages}</span>
-    <button type="button" class="gallery-page-btn" data-gallery-page="next" ${galleryCurrentPage === totalPages ? 'disabled' : ''}>下一页</button>
+    <button type="button" class="gallery-page-btn" data-gallery-load-more ${(!hasHiddenCards && !galleryApiHasMore) || galleryApiLoading ? 'disabled' : ''}>加载更多</button>
+    <span class="gallery-page-info">${text}</span>
   `;
-  pagination.querySelectorAll('[data-gallery-page]').forEach(button => {
-    button.addEventListener('click', () => {
-      const action = button.dataset.galleryPage;
-      if (action === 'prev') galleryCurrentPage -= 1;
-      else if (action === 'next') galleryCurrentPage += 1;
-      else galleryCurrentPage = Number(action) || 1;
-      renderGalleryPagination();
-      document.getElementById('gallery')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  });
+  pagination.querySelector('[data-gallery-load-more]')?.addEventListener('click', loadMoreGalleryItems);
 }
 
 function initGalleryPaginationObserver() {
@@ -1099,6 +1213,26 @@ function initGalleryPaginationObserver() {
   });
   galleryPaginationObserver.observe(grid, { childList: true });
   renderGalleryPagination();
+  const pagination = document.getElementById('galleryPagination');
+  if ('IntersectionObserver' in window && pagination && !galleryInfiniteObserver) {
+    galleryInfiniteObserver = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadMoreGalleryItems();
+    }, { rootMargin: '520px 0px' });
+    galleryInfiniteObserver.observe(pagination);
+  }
+}
+
+async function loadMoreGalleryItems() {
+  if (galleryApiLoading) return;
+  const cards = getGalleryCards();
+  if (galleryVisibleCount < cards.length) {
+    galleryVisibleCount += GALLERY_ITEMS_PER_PAGE;
+    renderGalleryPagination();
+    return;
+  }
+  if (galleryApiHasMore) {
+    await appendGalleryFromApi();
+  }
 }
 
 async function savePublishForm() {
@@ -1401,7 +1535,8 @@ function serializeGallery() {
       owner: card.dataset.owner || 'admin',
       original: card.dataset.original === 'true',
       saved: card.dataset.saved === 'true',
-      reviewsCount: Number(card.dataset.reviewsCount || 0)
+      reviewsCount: Number(card.dataset.reviewsCount || 0),
+      recommendationScore: Number(card.dataset.recommendationScore || 0)
     };
   });
 }
@@ -1415,18 +1550,71 @@ function saveGallery(showAlert = true) {
 
 async function loadGalleryFromApi() {
   try {
-    const items = apiList(await apiRequest('/artworks/?page_size=100&ordering=created_at'));
+    galleryApiPage = 1;
+    galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
+    const { items, hasMore } = await fetchRecommendedArtworkPage(galleryApiPage);
     const grid = document.getElementById('galleryGrid');
     grid.innerHTML = '';
     items.forEach(item => createGalleryCard(artworkToCardData(item)));
+    galleryApiHasMore = hasMore;
+    galleryApiPage += 1;
     cardIdCounter = Math.max(10, ...items.map(item => Number(item.id)).filter(Boolean)) + 1;
     localStorage.removeItem(STORAGE.gallery);
     renderMePage();
+    renderGalleryPagination();
     return true;
   } catch (error) {
     console.warn('Artwork API load failed, falling back to local gallery:', error);
     return false;
   }
+}
+
+async function fetchRecommendedArtworkPage(page = 1) {
+  const data = await apiRequest(`/artworks/recommendations/?page=${page}&page_size=${GALLERY_API_PAGE_SIZE}`, {
+    method: 'POST',
+    auth: false,
+    body: JSON.stringify(buildArtworkRecommendationPayload())
+  });
+  return {
+    items: apiList(data),
+    hasMore: !!data?.next
+  };
+}
+
+async function appendGalleryFromApi() {
+  if (galleryApiLoading || !galleryApiHasMore) return;
+  galleryApiLoading = true;
+  renderGalleryPagination();
+  try {
+    const { items, hasMore } = await fetchRecommendedArtworkPage(galleryApiPage);
+    const existing = new Set(getGalleryCards().map(card => String(card.dataset.id)));
+    items
+      .filter(item => !existing.has(String(item.id)))
+      .forEach(item => createGalleryCard(artworkToCardData(item)));
+    galleryApiHasMore = hasMore;
+    galleryApiPage += 1;
+    cardIdCounter = Math.max(cardIdCounter, ...items.map(item => Number(item.id)).filter(Boolean), 10) + 1;
+  } catch (error) {
+    console.warn('More artwork recommendations failed:', error);
+    galleryApiHasMore = false;
+  } finally {
+    galleryApiLoading = false;
+    renderMePage();
+    renderGalleryPagination();
+  }
+}
+
+async function refreshGalleryRecommendations() {
+  const loaded = await loadGalleryFromApi();
+  if (loaded) return;
+  const grid = document.getElementById('galleryGrid');
+  if (!grid) return;
+  const items = sortGalleryDataByRecommendation(serializeGallery());
+  galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
+  galleryApiHasMore = false;
+  grid.innerHTML = '';
+  items.forEach(item => createGalleryCard(item));
+  renderGalleryPagination();
 }
 
 function loadGallery() {
@@ -1444,7 +1632,10 @@ function loadGallery() {
       'linear-gradient(135deg, #d4f9e6, #b8f0d4)',
       'linear-gradient(135deg, #f9d4e6, #f0b8d4)'
     ];
-    galleryData.forEach((data, index) => {
+    galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
+    galleryApiHasMore = false;
+    const behaviorWeights = buildBehaviorTagWeights(galleryData);
+    sortGalleryDataByRecommendation(galleryData).forEach((data, index) => {
       const card = document.createElement('div');
       card.className = 'character-card fade-in visible';
       card.dataset.id = String(data.id);
@@ -1452,6 +1643,7 @@ function loadGallery() {
       card.dataset.original = String(data.original ?? ORIGINAL_CARD_IDS.has(String(data.id)));
       card.dataset.saved = String(data.saved === true);
       card.dataset.reviewsCount = String(data.reviewsCount || 0);
+      card.dataset.recommendationScore = String(scoreLocalArtwork(data, behaviorWeights) || 0);
       const imageSrc = normalizeImageSrc(data.imageSrc || '');
       const imageHtml = imageSrc ? `<img src="${escapeHTML(imageSrc)}" alt="${escapeHTML(data.name)}">` : '';
       card.innerHTML = `
@@ -1466,6 +1658,7 @@ function loadGallery() {
         <div class="character-info">
           <h3 onclick="editName(this)">${escapeHTML(data.name)}</h3>
           <span class="character-tag" onclick="editTag(this)">${escapeHTML(data.tag)}</span>
+          <button class="character-owner user-profile-link" type="button" data-user-profile="${escapeHTML(data.owner || 'admin')}">@${escapeHTML(data.owner || 'admin')}</button>
         </div>
       `;
       grid.appendChild(card);
@@ -1473,6 +1666,7 @@ function loadGallery() {
     normalizeCardActions();
     normalizeCommentButtons();
     cardIdCounter = Math.max(10, ...galleryData.map(d => parseInt(d.id, 10)).filter(Boolean)) + 1;
+    renderGalleryPagination();
   } catch (e) {
     console.error('加载画廊数据失败:', e);
   }
@@ -1485,7 +1679,8 @@ function renderInspirations() {
   const items = getInspirations();
   const html = items.map(item => `
     <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
-      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))}</span>
+      <button class="blog-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner)}">@${escapeHTML(item.owner)}</button>
       <h3>${escapeHTML(item.title)}</h3>
       <p>${escapeHTML(item.content)}</p>
       <div class="blog-tags">
@@ -1623,6 +1818,10 @@ function renderMePage() {
   document.getElementById('profileCreativeYearsInput').value = profile.creativeYears || '';
   document.getElementById('profileSignature').value = signature;
   document.getElementById('profilePhilosophy').value = philosophy;
+  const homeTags = getHomeTags(user);
+  const homeTagsInput = document.getElementById('profileHomeTags');
+  if (homeTagsInput) homeTagsInput.value = homeTags.join('、');
+  renderHomeTagPreview('profileHomeTagList', homeTags);
   document.getElementById('resetEmail').value = user.email || '';
 
   const avatar = document.getElementById('profileAvatar');
@@ -2033,18 +2232,22 @@ function commissionToApiPayload(item) {
 
 async function migrateLegacyCommissionsToApi() {
   if (localStorage.getItem('starSakuraCommissionsMigrated') === 'true') return;
-  const legacy = JSON.parse(localStorage.getItem(STORAGE.commissions) || '[]').map(normalizeCommissionItem);
-  if (!legacy.length) {
-    localStorage.setItem('starSakuraCommissionsMigrated', 'true');
-    return;
-  }
-  for (const item of legacy) {
-    await apiRequest('/custom/', {
-      method: 'POST',
-      body: JSON.stringify(commissionToApiPayload(item))
+  if (!currentUser) return;
+  if (!commissionMigrationPromise) {
+    commissionMigrationPromise = (async () => {
+      const legacy = JSON.parse(localStorage.getItem(STORAGE.commissions) || '[]').map(normalizeCommissionItem);
+      for (const item of legacy) {
+        await apiRequest('/custom/', {
+          method: 'POST',
+          body: JSON.stringify(commissionToApiPayload(item))
+        });
+      }
+      localStorage.setItem('starSakuraCommissionsMigrated', 'true');
+    })().finally(() => {
+      commissionMigrationPromise = null;
     });
   }
-  localStorage.setItem('starSakuraCommissionsMigrated', 'true');
+  return commissionMigrationPromise;
 }
 
 async function loadCommissionsFromApi() {
@@ -2279,6 +2482,7 @@ function normalizeProfile(profile = {}, username = '') {
     birthday: '',
     creativeYears: '',
     signature: '',
+    homeTags: [],
     ...profile
   };
 }
@@ -2498,7 +2702,8 @@ renderInspirations = async function() {
   blogList.innerHTML = '';
   const html = getInspirations().map(item => `
     <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
-      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))}</span>
+      <button class="blog-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner)}">@${escapeHTML(item.owner)}</button>
       <h3>${escapeHTML(item.title)}</h3>
       <p>${escapeHTML(item.content)}</p>
       <div class="blog-tags">
@@ -2521,7 +2726,8 @@ renderInspirations = async function() {
   const items = getInspirations();
   blogList.innerHTML = items.length ? items.map(item => `
     <article class="blog-item fade-in visible" data-user-inspiration="true" data-inspiration-id="${escapeHTML(item.id)}" onclick="openInspirationDetail('${escapeHTML(item.id)}')">
-      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))} · ${escapeHTML(item.owner)}</span>
+      <span class="blog-date">${escapeHTML(getInspirationDisplayTime(item))}</span>
+      <button class="blog-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner)}">@${escapeHTML(item.owner)}</button>
       <h3>${escapeHTML(item.title)}</h3>
       <p>${escapeHTML(item.content)}</p>
       <div class="blog-tags">
@@ -2606,7 +2812,7 @@ function renderInspirationCommentItem(item, isReply = false) {
     <div class="comment-item${isReply ? ' reply' : ''}">
       <div class="comment-avatar">${avatarHtml}</div>
       <div class="comment-bubble">
-        <div class="comment-author">${escapeHTML(name)}</div>
+        <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.reviewer || '')}">${escapeHTML(name)}</button>
         <div class="comment-text">${escapeHTML(item.content)}</div>
         <div class="comment-time">${escapeHTML(item.createdAt)}</div>
         <button class="comment-like${likedClass}" type="button" onclick="toggleInspirationCommentLike('${escapeHTML(item.id)}')">赞 ${item.likeCount}</button>
@@ -2688,7 +2894,11 @@ async function openInspirationDetail(inspirationId) {
   inspirationReplyTarget = '';
   document.getElementById('inspirationDetailTitle').textContent = item.title;
   document.getElementById('inspirationDetailTag').textContent = item.tag || '灵感';
-  document.getElementById('inspirationDetailOwner').textContent = item.owner ? `作者：${item.owner}` : '';
+  const inspirationOwner = document.getElementById('inspirationDetailOwner');
+  inspirationOwner.textContent = item.owner ? `作者：${item.owner}` : '';
+  inspirationOwner.classList.toggle('user-profile-link', !!item.owner);
+  if (item.owner) inspirationOwner.dataset.userProfile = item.owner;
+  else delete inspirationOwner.dataset.userProfile;
   document.getElementById('inspirationDetailDate').textContent = getInspirationDisplayTime(item) ? `时间：${getInspirationDisplayTime(item)}` : '';
   document.getElementById('inspirationDetailContent').textContent = item.content;
   document.getElementById('inspirationCommentId').value = activeInspirationId;
@@ -3112,7 +3322,7 @@ function renderSearchCard(result) {
         </div>
         <p class="search-result-desc">${escapeHTML(item.name)} 是由 @${escapeHTML(item.owner || 'admin')} 发布的作品。</p>
         <div class="search-result-meta">
-          <span>作者 @${escapeHTML(item.owner || 'admin')}</span>
+          <button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner || 'admin')}">作者 @${escapeHTML(item.owner || 'admin')}</button>
           <span>评价 ${Number(item.reviewsCount || 0)} 条</span>
         </div>
         <div class="search-result-tags"><span>${escapeHTML(item.tag || '原创作品')}</span></div>
@@ -3129,8 +3339,8 @@ function renderSearchCard(result) {
         </div>
         <p class="search-result-desc">${escapeHTML(item.description || '暂无需求说明')}</p>
         <div class="search-result-meta">
-          <span>发布者 @${escapeHTML(item.requester || 'admin')}</span>
-          <span>接单者 ${escapeHTML(item.artist || '暂未接单')}</span>
+          <button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.requester || 'admin')}">发布者 @${escapeHTML(item.requester || 'admin')}</button>
+          ${item.artist ? `<button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.artist)}">接单者 @${escapeHTML(item.artist)}</button>` : '<span>接单者 暂未接单</span>'}
           <span>${escapeHTML(item.createdAt || '')}</span>
         </div>
         <div class="search-result-tags">
@@ -3150,7 +3360,7 @@ function renderSearchCard(result) {
       </div>
       <p class="search-result-desc">${escapeHTML(item.content || '暂无内容')}</p>
       <div class="search-result-meta">
-        <span>作者 @${escapeHTML(item.owner || 'admin')}</span>
+        <button class="user-profile-link" type="button" data-user-profile="${escapeHTML(item.owner || 'admin')}">作者 @${escapeHTML(item.owner || 'admin')}</button>
         <span>${escapeHTML(getInspirationDisplayTime(item) || '')}</span>
       </div>
       <div class="search-result-tags"><span>${escapeHTML(item.tag || '灵感')}</span></div>
@@ -3224,7 +3434,7 @@ function focusGallerySearchResult(artworkId) {
   const cards = getGalleryCards();
   const index = cards.findIndex(card => String(card.dataset.id) === String(artworkId));
   if (index >= 0) {
-    galleryCurrentPage = Math.floor(index / GALLERY_ITEMS_PER_PAGE) + 1;
+    galleryVisibleCount = Math.max(galleryVisibleCount, index + 1);
     renderGalleryPagination();
     window.setTimeout(() => {
       const card = getGalleryCard(artworkId);
@@ -3257,6 +3467,9 @@ function openCommissionDetail(commissionId) {
 
 function closeCommissionDetail() {
   document.getElementById('commissionDetail')?.classList.add('hidden');
+  activeCommissionDetailId = '';
+  commissionDetailRequestToken += 1;
+  clearTimeout(commissionArtistSearchTimer);
 }
 
 function openSearchResult(type, id) {
@@ -3348,6 +3561,786 @@ document.getElementById('commissionDetailClose')?.addEventListener('click', clos
 document.getElementById('commissionDetail')?.addEventListener('click', event => {
   if (event.target.id === 'commissionDetail') closeCommissionDetail();
 });
+
+function normalizeCommissionBid(value) {
+  if (!value) return null;
+  const artistId = value.artistId || value.artist_id || value.artist || '';
+  return {
+    id: String(value.id || ''),
+    customRequest: value.customRequest || value.custom_request || '',
+    artistId,
+    artist: value.artistUsername || value.artist_username || (typeof value.artist === 'string' ? value.artist : '') || (artistId ? 'artist-' + artistId : ''),
+    avatar: normalizeImageSrc(value.avatar || value.artistAvatar || value.artist_avatar || ''),
+    amount: String(value.amount || ''),
+    message: value.message || '',
+    status: value.status || 'active',
+    createdAt: value.createdAt || value.created_at || '',
+    updatedAt: value.updatedAt || value.updated_at || ''
+  };
+}
+
+function normalizeCommissionInvitation(value) {
+  if (!value) return null;
+  const artistId = value.artistId || value.artist_id || value.artist || '';
+  return {
+    id: String(value.id || ''),
+    customRequest: value.customRequest || value.custom_request || '',
+    artistId,
+    artist: value.artistUsername || value.artist_username || (typeof value.artist === 'string' ? value.artist : '') || (artistId ? 'artist-' + artistId : ''),
+    avatar: normalizeImageSrc(value.avatar || value.artistAvatar || value.artist_avatar || ''),
+    invitedBy: value.invitedBy || value.invited_by || '',
+    invitedByUsername: value.invitedByUsername || value.invited_by_username || '',
+    amount: String(value.amount || ''),
+    message: value.message || '',
+    status: value.status || 'pending',
+    respondedAt: value.respondedAt || value.responded_at || '',
+    createdAt: value.createdAt || value.created_at || '',
+    updatedAt: value.updatedAt || value.updated_at || ''
+  };
+}
+
+const commissionItemNormalizer = normalizeCommissionItem;
+normalizeCommissionItem = function(item, index = 0) {
+  const normalized = commissionItemNormalizer(item, index);
+  return Object.assign(normalized, {
+    requesterId: item.requesterId || item.requester_id || (typeof item.requester === 'number' ? item.requester : ''),
+    artistId: item.artistId || item.artist_id || (typeof item.artist === 'number' ? item.artist : ''),
+    agreedPrice: String(item.agreedPrice || item.agreed_price || ''),
+    bidCount: Number(item.bidCount ?? item.bid_count ?? 0),
+    myBid: normalizeCommissionBid(item.myBid || item.my_bid),
+    myInvitation: normalizeCommissionInvitation(item.myInvitation || item.my_invitation),
+    selectedBid: normalizeCommissionBid(item.selectedBid || item.selected_bid)
+  });
+};
+
+commissionFromApi = function(item, index = 0) {
+  return normalizeCommissionItem({
+    id: String(item.id || 'commission-' + Date.now() + '-' + index),
+    requester: item.requester_username || item.requester || 'admin',
+    requesterId: item.requester,
+    artist: item.artist_username || item.artist || '',
+    artistId: item.artist,
+    title: item.title || '\u672a\u547d\u540d\u59d4\u6258',
+    typeLabel: item.type_label || item.typeLabel || '\u59d4\u6258',
+    description: item.description || '',
+    budget: item.budget || item.budget_note || '\u53ef\u5546\u8bae',
+    agreedPrice: item.agreed_price || '',
+    status: item.status === 'submitted' ? 'open' : (item.status || 'open'),
+    bidCount: item.bid_count,
+    myBid: item.my_bid,
+    myInvitation: item.my_invitation,
+    selectedBid: item.selected_bid,
+    createdAt: formatCommissionTime(item.created_at) || new Date().toLocaleString(),
+    acceptedAt: item.accepted_at || '',
+    abandonRequestedAt: item.abandon_requested_at || ''
+  }, index);
+};
+
+getCommissionStatusLabel = function(status) {
+  const labels = {
+    open: '\u7ade\u4ef7\u4e2d',
+    submitted: '\u7ade\u4ef7\u4e2d',
+    accepted: '\u5df2\u9009\u5b9a\u753b\u5e08',
+    abandon_requested: '\u7533\u8bf7\u653e\u5f03\u4e2d',
+    in_progress: '\u521b\u4f5c\u4e2d',
+    reviewing: '\u5f85\u786e\u8ba4',
+    completed: '\u5df2\u5b8c\u6210',
+    cancelled: '\u5df2\u53d6\u6d88'
+  };
+  return labels[status] || '\u5f85\u63a5\u5355';
+};
+
+function getCommissionBidStatusLabel(status) {
+  return {
+    active: '\u6709\u6548\u62a5\u4ef7',
+    withdrawn: '\u5df2\u64a4\u56de',
+    selected: '\u5df2\u9009\u4e2d',
+    rejected: '\u672a\u9009\u4e2d'
+  }[status] || status || '\u672a\u77e5';
+}
+
+function getCommissionInvitationStatusLabel(status) {
+  return {
+    pending: '\u5f85\u56de\u5e94',
+    accepted: '\u5df2\u63a5\u53d7',
+    declined: '\u5df2\u62d2\u7edd',
+    cancelled: '\u5df2\u53d6\u6d88'
+  }[status] || status || '\u672a\u77e5';
+}
+
+const unguardedCommissionLoader = loadCommissionsFromApi;
+loadCommissionsFromApi = function() {
+  if (!commissionLoadPromise) {
+    commissionLoadPromise = Promise.resolve()
+      .then(() => unguardedCommissionLoader())
+      .finally(() => {
+        commissionLoadPromise = null;
+      });
+  }
+  return commissionLoadPromise;
+};
+
+const initializeCommissionPage = initCommissionPage;
+initCommissionPage = function() {
+  initializeCommissionPage();
+  const section = document.getElementById('contact');
+  const hint = section?.querySelector('.section-title p');
+  const badge = section?.querySelector('.status-badge');
+  if (hint) hint.textContent = '\u753b\u5e08\u63d0\u4ea4\u62a5\u4ef7\uff0c\u53d1\u5e03\u8005\u6311\u9009\u5408\u9002\u4eba\u9009\uff0c\u4e5f\u53ef\u5b9a\u5411\u9080\u8bf7\u5408\u4f5c';
+  if (badge) badge.textContent = '\u7ade\u4ef7\u5f00\u653e\u4e2d';
+};
+
+function setCommissionWorkspaceLabels() {
+  const labels = {
+    commissionWorkspaceTitle: '\u7ade\u4ef7\u4e0e\u5b9a\u5411\u9080\u8bf7',
+    commissionDetailRefresh: '\u5237\u65b0',
+    commissionBidKicker: '\u516c\u5f00\u7ade\u4ef7',
+    commissionBidTitle: '\u753b\u5e08\u62a5\u4ef7',
+    commissionInvitationKicker: '\u5b9a\u5411\u5408\u4f5c',
+    commissionInvitationTitle: '\u753b\u5e08\u9080\u8bf7',
+    commissionDetailAgreedPriceLabel: '\u6210\u4ea4\u4ef7'
+  };
+  Object.entries(labels).forEach(([id, label]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = label;
+  });
+}
+
+function commissionStatusClass(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+}
+
+function formatCommissionAmount(value, fallback = '') {
+  const text = String(value || '').trim();
+  return text ? '\uffe5' + text : fallback;
+}
+
+function commissionAvatarHtml(src, username) {
+  const image = normalizeImageSrc(src || '');
+  if (image) {
+    return '<span class="commission-avatar"><img src="' + escapeHTML(image) + '" alt="' + escapeHTML(username || '\u753b\u5e08') + '"></span>';
+  }
+  const fallback = String(username || '\u753b').trim().slice(0, 1).toUpperCase() || '\u753b';
+  return '<span class="commission-avatar">' + escapeHTML(fallback) + '</span>';
+}
+
+function commissionPersonalStateHtml(item) {
+  const states = [];
+  if (item.myBid) {
+    states.push(
+      '<span class="commission-inline-state status-' + commissionStatusClass(item.myBid.status) + '">' +
+      '\u6211\u7684\u62a5\u4ef7 ' + escapeHTML(formatCommissionAmount(item.myBid.amount)) +
+      ' \u00b7 ' + escapeHTML(getCommissionBidStatusLabel(item.myBid.status)) +
+      '</span>'
+    );
+  }
+  if (item.myInvitation) {
+    states.push(
+      '<span class="commission-inline-state status-' + commissionStatusClass(item.myInvitation.status) + '">' +
+      '\u5b9a\u5411\u9080\u8bf7 \u00b7 ' + escapeHTML(getCommissionInvitationStatusLabel(item.myInvitation.status)) +
+      '</span>'
+    );
+  }
+  if (item.agreedPrice) {
+    states.push('<span class="commission-inline-state status-selected">\u6210\u4ea4 ' + escapeHTML(formatCommissionAmount(item.agreedPrice)) + '</span>');
+  }
+  return states.length ? '<div class="commission-personal-states">' + states.join('') + '</div>' : '';
+}
+
+commissionActionHtml = function(item) {
+  const buttons = [];
+  let detailLabel = '\u67e5\u770b\u8be6\u60c5';
+  if (currentUser && item.requester === currentUser.username) detailLabel = '\u67e5\u770b\u62a5\u4ef7\u4e0e\u9080\u8bf7';
+  else if (item.myInvitation?.status === 'pending') detailLabel = '\u5904\u7406\u9080\u8bf7';
+  else if (currentUser && item.status === 'open') detailLabel = item.myBid?.status === 'active' ? '\u66f4\u65b0\u62a5\u4ef7' : '\u67e5\u770b\u5e76\u62a5\u4ef7';
+  buttons.push('<button type="button" class="commission-btn" onclick="openCommissionDetail(\'' + escapeHTML(item.id) + '\')">' + detailLabel + '</button>');
+  if (currentUser && item.requester === currentUser.username && item.status === 'open') {
+    buttons.push('<button type="button" class="commission-btn secondary" onclick="openCommissionEditor(\'' + escapeHTML(item.id) + '\')">\u7f16\u8f91</button>');
+    buttons.push('<button type="button" class="commission-btn secondary danger" onclick="deleteCommission(\'' + escapeHTML(item.id) + '\')">\u5220\u9664</button>');
+  }
+  if (currentUser && item.artist === currentUser.username && item.status === 'accepted') {
+    buttons.push('<button type="button" class="commission-btn secondary" onclick="abandonCommission(\'' + escapeHTML(item.id) + '\')">\u653e\u5f03\u59d4\u6258</button>');
+  }
+  if (currentUser && item.requester === currentUser.username && item.status === 'abandon_requested') {
+    buttons.push('<button type="button" class="commission-btn" onclick="resolveAbandonRequest(\'' + escapeHTML(item.id) + '\', true)">\u540c\u610f\u653e\u5f03</button>');
+    buttons.push('<button type="button" class="commission-btn secondary" onclick="resolveAbandonRequest(\'' + escapeHTML(item.id) + '\', false)">\u62d2\u7edd\u653e\u5f03</button>');
+  }
+  return buttons.join('');
+};
+
+renderCommissionBoard = async function() {
+  const board = document.getElementById('commissionBoard');
+  if (!board) return;
+  if (!commissionCache.length) {
+    board.innerHTML = '<div class="commission-empty">\u6b63\u5728\u52a0\u8f7d\u59d4\u6258...</div>';
+    try {
+      await loadCommissionsFromApi();
+    } catch (error) {
+      console.warn('Commission API unavailable:', error);
+    }
+  }
+  const commissions = getCommissions();
+  const openCount = commissions.filter(item => item.status === 'open').length;
+  const acceptedCount = commissions.filter(item => !['open', 'cancelled'].includes(item.status)).length;
+  const mineCount = currentUser
+    ? commissions.filter(item => item.requester === currentUser.username || item.artist === currentUser.username || item.myBid || item.myInvitation).length
+    : 0;
+  const counters = {
+    commissionOpenCount: openCount,
+    commissionAcceptedCount: acceptedCount,
+    commissionMineCount: mineCount
+  };
+  Object.entries(counters).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+  });
+  if (!commissions.length) {
+    board.innerHTML = '<div class="commission-empty">\u6682\u65f6\u8fd8\u6ca1\u6709\u516c\u5f00\u59d4\u6258\uff0c\u5148\u53bb\u53d1\u5e03\u9875\u521b\u5efa\u4e00\u4e2a\u5427\u3002</div>';
+    return;
+  }
+  const users = getUsers();
+  board.innerHTML = commissions.map(item => {
+    const requesterUser = users[item.requester] || { username: item.requester };
+    const requesterName = getDisplayName(requesterUser);
+    const minePill = currentUser && (item.requester === currentUser.username || item.artist === currentUser.username || item.myBid || item.myInvitation)
+      ? '<span class="commission-pill mine">\u4e0e\u6211\u76f8\u5173</span>'
+      : '';
+    const pendingClass = item.status === 'abandon_requested' ? ' pending' : '';
+    const acceptedClass = item.status === 'accepted' ? ' accepted' : '';
+    const bidSummary = item.status === 'open'
+      ? '<span class="commission-bid-summary"><strong>' + escapeHTML(item.bidCount) + '</strong> \u4e2a\u6709\u6548\u62a5\u4ef7</span>'
+      : item.agreedPrice
+        ? '<span class="commission-bid-summary selected"><strong>' + escapeHTML(formatCommissionAmount(item.agreedPrice)) + '</strong> \u5df2\u6210\u4ea4</span>'
+        : '<span class="commission-bid-summary"><strong>' + escapeHTML(item.bidCount) + '</strong> \u4e2a\u62a5\u4ef7</span>';
+    return '<article class="commission-card">' +
+      '<div class="commission-card-head">' +
+        '<div>' +
+          '<h3>' + escapeHTML(item.title) + '</h3>' +
+          '<div class="commission-meta">' +
+            '<span>\u53d1\u5e03\u8005\uff1a' + escapeHTML(requesterName) + '</span>' +
+            '<span>\u7c7b\u578b\uff1a' + escapeHTML(item.typeLabel) + '</span>' +
+            '<span>\u9884\u7b97\uff1a' + escapeHTML(item.budget) + '</span>' +
+            '<span>' + escapeHTML(item.createdAt) + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="commission-card-badges">' +
+          '<span class="commission-pill' + acceptedClass + pendingClass + '">' + escapeHTML(getCommissionStatusLabel(item.status)) + '</span>' +
+          minePill +
+        '</div>' +
+      '</div>' +
+      '<div class="commission-desc">' + escapeHTML(item.description) + '</div>' +
+      '<div class="commission-market-summary">' + bidSummary + commissionPersonalStateHtml(item) + '</div>' +
+      '<div class="commission-actions">' + commissionActionHtml(item) + '</div>' +
+    '</article>';
+  }).join('');
+};
+
+const renderProfileBeforeMarketplace = renderMePage;
+renderMePage = function() {
+  renderProfileBeforeMarketplace();
+  if (!currentUser) return;
+  const related = getCommissions().filter(item =>
+    item.requester === currentUser.username ||
+    item.artist === currentUser.username ||
+    item.myBid ||
+    item.myInvitation
+  );
+  const count = document.getElementById('profileCommissionCount');
+  if (count) count.textContent = related.length;
+  refreshMyCommissionList(related);
+};
+
+refreshMyCommissionList = function(commissions) {
+  if (!currentUser) return;
+  const target = document.getElementById('myCommissionList');
+  if (!target) return;
+  target.innerHTML = commissions.length
+    ? commissions.map(item => {
+      let role = '\u4e0e\u6211\u76f8\u5173';
+      if (item.requester === currentUser.username) role = '\u6211\u53d1\u5e03\u7684\u59d4\u6258';
+      else if (item.artist === currentUser.username) role = '\u6211\u627f\u63a5\u7684\u59d4\u6258';
+      else if (item.myInvitation) role = '\u6536\u5230\u7684\u5b9a\u5411\u9080\u8bf7';
+      else if (item.myBid) role = '\u6211\u53c2\u4e0e\u7684\u7ade\u4ef7';
+      const states = [];
+      if (item.myBid) states.push(formatCommissionAmount(item.myBid.amount) + ' \u00b7 ' + getCommissionBidStatusLabel(item.myBid.status));
+      if (item.myInvitation) states.push(getCommissionInvitationStatusLabel(item.myInvitation.status));
+      if (item.agreedPrice) states.push('\u6210\u4ea4 ' + formatCommissionAmount(item.agreedPrice));
+      return '<div class="mini-item">' +
+        '<strong>' + escapeHTML(item.title) + '</strong>' +
+        '<span>' + escapeHTML(role) + ' \u00b7 ' + escapeHTML(item.typeLabel) + ' \u00b7 ' + escapeHTML(getCommissionStatusLabel(item.status)) +
+          (states.length ? ' \u00b7 ' + escapeHTML(states.join(' / ')) : '') + '</span>' +
+        '<div class="mini-actions"><button type="button" class="mini-edit-btn" onclick="openCommissionDetail(\'' + escapeHTML(item.id) + '\')">\u67e5\u770b\u7ade\u4ef7\u4e0e\u9080\u8bf7</button></div>' +
+      '</div>';
+    }).join('')
+    : '<div class="empty-state">\u8fd8\u6ca1\u6709\u4e0e\u4f60\u76f8\u5173\u7684\u59d4\u6258\u3002</div>';
+};
+
+function isCommissionRequester(item) {
+  return !!currentUser && item?.requester === currentUser.username;
+}
+
+function renderCommissionDetailSummary(item) {
+  if (!item) return;
+  setCommissionWorkspaceLabels();
+  document.getElementById('commissionDetailTitle').textContent = item.title || '\u59d4\u6258\u8be6\u60c5';
+  document.getElementById('commissionDetailStatus').textContent = getCommissionStatusLabel(item.status);
+  document.getElementById('commissionDetailType').textContent = item.typeLabel || '\u59d4\u6258';
+  document.getElementById('commissionDetailBudget').textContent = item.budget || '\u53ef\u5546\u8bae';
+  document.getElementById('commissionDetailRequester').textContent = item.requester || 'admin';
+  document.getElementById('commissionDetailArtist').textContent = item.artist || '\u6682\u672a\u9009\u5b9a';
+  document.getElementById('commissionDetailDate').textContent = item.createdAt || '';
+  document.getElementById('commissionDetailDescription').textContent = item.description || '\u6682\u65e0\u9700\u6c42\u8bf4\u660e';
+  const agreedRow = document.getElementById('commissionDetailAgreedPriceRow');
+  const agreedPrice = document.getElementById('commissionDetailAgreedPrice');
+  if (agreedRow) agreedRow.hidden = !item.agreedPrice;
+  if (agreedPrice) agreedPrice.textContent = item.agreedPrice ? formatCommissionAmount(item.agreedPrice) : '';
+  const actions = document.getElementById('commissionDetailActions');
+  if (!actions) return;
+  const buttons = [];
+  if (isCommissionRequester(item) && item.status === 'open') {
+    buttons.push('<button type="button" class="commission-btn secondary" onclick="closeCommissionDetail(); openCommissionEditor(\'' + escapeHTML(item.id) + '\')">\u7f16\u8f91\u59d4\u6258</button>');
+    buttons.push('<button type="button" class="commission-btn secondary danger" onclick="closeCommissionDetail(); deleteCommission(\'' + escapeHTML(item.id) + '\')">\u5220\u9664\u59d4\u6258</button>');
+  }
+  if (currentUser && item.artist === currentUser.username && item.status === 'accepted') {
+    buttons.push('<button type="button" class="commission-btn secondary" onclick="abandonCommission(\'' + escapeHTML(item.id) + '\')">\u7533\u8bf7\u653e\u5f03</button>');
+  }
+  if (isCommissionRequester(item) && item.status === 'abandon_requested') {
+    buttons.push('<button type="button" class="commission-btn" onclick="resolveAbandonRequest(\'' + escapeHTML(item.id) + '\', true)">\u540c\u610f\u653e\u5f03</button>');
+    buttons.push('<button type="button" class="commission-btn secondary" onclick="resolveAbandonRequest(\'' + escapeHTML(item.id) + '\', false)">\u62d2\u7edd\u653e\u5f03</button>');
+  }
+  actions.innerHTML = buttons.join('');
+}
+
+function parseCommissionBudgetAmount(value) {
+  const text = String(value || '').trim().replace(/,/g, '');
+  const match = text.match(/^(?:[\uffe5\u00a5$]\s*)?(\d+(?:\.\d{1,2})?)\s*(?:\u5143)?$/);
+  return match && Number(match[1]) > 0 ? match[1] : '';
+}
+
+function detailCommissionBid(item) {
+  return commissionDetailBids.find(bid =>
+    String(bid.artistId) === String(currentUser?.id || '') ||
+    bid.artist === currentUser?.username
+  ) || item.myBid || null;
+}
+
+function detailCommissionInvitation(item) {
+  return commissionDetailInvitations.find(invitation =>
+    String(invitation.artistId) === String(currentUser?.id || '') ||
+    invitation.artist === currentUser?.username
+  ) || item.myInvitation || null;
+}
+
+function renderCommissionBidComposer(item) {
+  const target = document.getElementById('commissionBidComposer');
+  if (!target) return;
+  if (!currentUser) {
+    target.innerHTML = '<div class="commission-market-note">\u767b\u5f55\u540e\u624d\u80fd\u63d0\u4ea4\u62a5\u4ef7\u3002</div>';
+    return;
+  }
+  if (isCommissionRequester(item)) {
+    target.innerHTML = '<div class="commission-market-note">\u4f60\u53ef\u4ee5\u6bd4\u8f83\u753b\u5e08\u7684\u4ef7\u683c\u4e0e\u8bf4\u660e\uff0c\u7136\u540e\u9009\u5b9a\u4e00\u4f4d\u3002</div>';
+    return;
+  }
+  if (item.status !== 'open') {
+    target.innerHTML = '<div class="commission-market-note">\u8be5\u59d4\u6258\u5df2\u7ed3\u675f\u7ade\u4ef7\u3002</div>';
+    return;
+  }
+  const myBid = detailCommissionBid(item);
+  const active = myBid?.status === 'active';
+  const submitLabel = active ? '\u66f4\u65b0\u62a5\u4ef7' : (myBid ? '\u91cd\u65b0\u62a5\u4ef7' : '\u63d0\u4ea4\u62a5\u4ef7');
+  target.innerHTML =
+    '<form class="commission-market-form" onsubmit="submitCommissionBid(event)">' +
+      '<label for="commissionBidAmount">\u62a5\u4ef7\u91d1\u989d\uff08\u5143\uff09</label>' +
+      '<input id="commissionBidAmount" type="number" min="0.01" step="0.01" required value="' + escapeHTML(myBid?.amount || '') + '" placeholder="500.00">' +
+      '<label for="commissionBidMessage">\u62a5\u4ef7\u8bf4\u660e</label>' +
+      '<textarea id="commissionBidMessage" maxlength="500" placeholder="\u8bf4\u660e\u5de5\u671f\u3001\u98ce\u683c\u6216\u53ef\u4fee\u6539\u6b21\u6570">' + escapeHTML(myBid?.message || '') + '</textarea>' +
+      '<div class="commission-form-actions">' +
+        '<button type="submit" class="commission-btn">' + submitLabel + '</button>' +
+        (active ? '<button type="button" class="commission-btn secondary danger" onclick="withdrawCommissionBid()">\u64a4\u56de\u62a5\u4ef7</button>' : '') +
+      '</div>' +
+    '</form>';
+}
+
+function renderCommissionBidList(item) {
+  const target = document.getElementById('commissionDetailBidList');
+  const count = document.getElementById('commissionDetailBidCount');
+  if (!target || !count) return;
+  const byId = new Map();
+  commissionDetailBids.filter(Boolean).forEach(bid => byId.set(String(bid.id), bid));
+  if (item.myBid) byId.set(String(item.myBid.id || 'mine'), item.myBid);
+  if (item.selectedBid) byId.set(String(item.selectedBid.id || 'selected'), item.selectedBid);
+  const bids = [...byId.values()].sort((a, b) => {
+    const rank = { selected: 0, active: 1, withdrawn: 2, rejected: 3 };
+    return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
+  });
+  count.textContent = item.bidCount || bids.filter(bid => bid.status === 'active').length;
+  if (!bids.length) {
+    target.innerHTML = '<div class="commission-market-empty">\u8fd8\u6ca1\u6709\u753b\u5e08\u62a5\u4ef7\u3002</div>';
+    return;
+  }
+  target.innerHTML = bids.map(bid => {
+    const canSelect = isCommissionRequester(item) && item.status === 'open' && bid.status === 'active';
+    return '<article class="commission-offer-card status-' + commissionStatusClass(bid.status) + '">' +
+      '<div class="commission-offer-head">' +
+        '<div class="commission-person user-profile-link" data-user-profile="' + escapeHTML(bid.artist || '') + '">' +
+          commissionAvatarHtml(bid.avatar, bid.artist) +
+          '<div><strong>' + escapeHTML(bid.artist || '\u753b\u5e08') + '</strong><span>' + escapeHTML(formatCommissionTime(bid.updatedAt || bid.createdAt)) + '</span></div>' +
+        '</div>' +
+        '<strong class="commission-offer-amount">' + escapeHTML(formatCommissionAmount(bid.amount, '\u5f85\u6c9f\u901a')) + '</strong>' +
+      '</div>' +
+      (bid.message ? '<p>' + escapeHTML(bid.message) + '</p>' : '<p class="muted">\u672a\u586b\u5199\u62a5\u4ef7\u8bf4\u660e</p>') +
+      '<div class="commission-offer-foot">' +
+        '<span class="commission-state-chip status-' + commissionStatusClass(bid.status) + '">' + escapeHTML(getCommissionBidStatusLabel(bid.status)) + '</span>' +
+        (canSelect ? '<button type="button" class="commission-btn compact" onclick="selectCommissionBid(\'' + escapeHTML(bid.id) + '\')">\u9009\u5b9a\u8be5\u753b\u5e08</button>' : '') +
+      '</div>' +
+    '</article>';
+  }).join('');
+}
+
+function renderCommissionInviteComposer(item) {
+  const target = document.getElementById('commissionInviteComposer');
+  if (!target) return;
+  if (!isCommissionRequester(item)) {
+    target.innerHTML = '<div class="commission-market-note">\u53d1\u5e03\u8005\u53ef\u4ee5\u5b9a\u5411\u9080\u8bf7\u753b\u5e08\uff1b\u6536\u5230\u9080\u8bf7\u540e\u53ef\u5728\u4e0b\u65b9\u56de\u5e94\u3002</div>';
+    return;
+  }
+  if (item.status !== 'open') {
+    target.innerHTML = '<div class="commission-market-note">\u8be5\u59d4\u6258\u5df2\u9009\u5b9a\u753b\u5e08\uff0c\u4e0d\u518d\u53d1\u51fa\u65b0\u9080\u8bf7\u3002</div>';
+    return;
+  }
+  const selected = commissionSelectedArtist;
+  target.innerHTML =
+    '<form class="commission-market-form" onsubmit="sendCommissionInvitation(event)">' +
+      '<label for="commissionArtistSearch">\u641c\u7d22\u753b\u5e08</label>' +
+      '<input id="commissionArtistSearch" type="search" autocomplete="off" value="' + escapeHTML(selected ? '@' + selected.username : '') + '" placeholder="\u8f93\u5165\u753b\u5e08\u7528\u6237\u540d" oninput="queueCommissionArtistSearch(this.value)">' +
+      '<input id="commissionArtistId" type="hidden" value="' + escapeHTML(selected?.id || '') + '">' +
+      '<div class="commission-artist-results" id="commissionArtistResults"></div>' +
+      '<label for="commissionInviteAmount">\u9080\u8bf7\u4ef7\u683c\uff08\u5143\uff09</label>' +
+      '<input id="commissionInviteAmount" type="number" min="0.01" step="0.01" required value="' + escapeHTML(parseCommissionBudgetAmount(item.budget)) + '" placeholder="500.00">' +
+      '<label for="commissionInviteMessage">\u9080\u8bf7\u7559\u8a00</label>' +
+      '<textarea id="commissionInviteMessage" maxlength="500" placeholder="\u8bf4\u660e\u5e0c\u671b\u4e0e\u8be5\u753b\u5e08\u5408\u4f5c\u7684\u539f\u56e0"></textarea>' +
+      '<div class="commission-form-actions"><button type="submit" class="commission-btn">\u53d1\u9001\u9080\u8bf7</button></div>' +
+    '</form>';
+  renderCommissionArtistResults();
+}
+
+function renderCommissionInvitationList(item) {
+  const target = document.getElementById('commissionDetailInvitationList');
+  const count = document.getElementById('commissionDetailInvitationCount');
+  if (!target || !count) return;
+  const byId = new Map();
+  commissionDetailInvitations.filter(Boolean).forEach(invitation => byId.set(String(invitation.id), invitation));
+  if (item.myInvitation) byId.set(String(item.myInvitation.id || 'mine'), item.myInvitation);
+  const invitations = [...byId.values()].sort((a, b) => {
+    const rank = { pending: 0, accepted: 1, declined: 2, cancelled: 3 };
+    return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
+  });
+  count.textContent = invitations.length;
+  if (!invitations.length) {
+    target.innerHTML = '<div class="commission-market-empty">\u6682\u65e0\u5b9a\u5411\u9080\u8bf7\u3002</div>';
+    return;
+  }
+  target.innerHTML = invitations.map(invitation => {
+    const canRespond = !isCommissionRequester(item) && invitation.status === 'pending' && (
+      invitation.artist === currentUser?.username ||
+      String(invitation.artistId) === String(currentUser?.id || '') ||
+      commissionDetailInvitations.length === 1
+    );
+    return '<article class="commission-offer-card status-' + commissionStatusClass(invitation.status) + '">' +
+      '<div class="commission-offer-head">' +
+        '<div class="commission-person user-profile-link" data-user-profile="' + escapeHTML(invitation.artist || '') + '">' +
+          commissionAvatarHtml(invitation.avatar, invitation.artist) +
+          '<div><strong>' + escapeHTML(invitation.artist || '\u753b\u5e08') + '</strong><span>' + escapeHTML(formatCommissionTime(invitation.updatedAt || invitation.createdAt)) + '</span></div>' +
+        '</div>' +
+        '<strong class="commission-offer-amount">' + escapeHTML(formatCommissionAmount(invitation.amount, '\u5f85\u6c9f\u901a')) + '</strong>' +
+      '</div>' +
+      (invitation.message ? '<p>' + escapeHTML(invitation.message) + '</p>' : '<p class="muted">\u672a\u586b\u5199\u9080\u8bf7\u7559\u8a00</p>') +
+      '<div class="commission-offer-foot">' +
+        '<span class="commission-state-chip status-' + commissionStatusClass(invitation.status) + '">' + escapeHTML(getCommissionInvitationStatusLabel(invitation.status)) + '</span>' +
+        (canRespond ? '<div class="commission-form-actions"><button type="button" class="commission-btn compact" onclick="respondCommissionInvitation(\'' + escapeHTML(invitation.id) + '\', \'accept\')">\u63a5\u53d7</button><button type="button" class="commission-btn secondary compact" onclick="respondCommissionInvitation(\'' + escapeHTML(invitation.id) + '\', \'decline\')">\u62d2\u7edd</button></div>' : '') +
+      '</div>' +
+    '</article>';
+  }).join('');
+}
+
+function renderCommissionWorkspace(item, options = {}) {
+  const hint = document.getElementById('commissionWorkspaceHint');
+  if (!item || !hint) return;
+  if (options.loading) hint.textContent = '\u6b63\u5728\u52a0\u8f7d\u6700\u65b0\u62a5\u4ef7\u4e0e\u9080\u8bf7...';
+  else if (options.error) hint.textContent = '\u6682\u65f6\u65e0\u6cd5\u540c\u6b65\u6700\u65b0\u6570\u636e\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u3002';
+  else if (isCommissionRequester(item) && item.status === 'open') hint.textContent = '\u6bd4\u8f83\u753b\u5e08\u62a5\u4ef7\uff0c\u6216\u6309\u7528\u6237\u540d\u5b9a\u5411\u9080\u8bf7\u3002';
+  else if (detailCommissionInvitation(item)?.status === 'pending') hint.textContent = '\u4f60\u6536\u5230\u4e86\u5b9a\u5411\u9080\u8bf7\uff0c\u53ef\u4ee5\u63a5\u53d7\u6216\u62d2\u7edd\u3002';
+  else if (item.status === 'open') hint.textContent = '\u586b\u5199\u4ef7\u683c\u548c\u8bf4\u660e\u53c2\u4e0e\u7ade\u4ef7\uff0c\u62a5\u4ef7\u53ef\u66f4\u65b0\u6216\u64a4\u56de\u3002';
+  else hint.textContent = '\u8be5\u59d4\u6258\u5df2\u7ed3\u675f\u5019\u9009\u9636\u6bb5\u3002';
+  renderCommissionBidComposer(item);
+  renderCommissionBidList(item);
+  renderCommissionInviteComposer(item);
+  renderCommissionInvitationList(item);
+}
+
+function getActiveCommissionDetail() {
+  return getCommissions().find(item => String(item.id) === String(activeCommissionDetailId))
+    || searchState.results.commissions.find(item => String(item.id) === String(activeCommissionDetailId))
+    || null;
+}
+
+async function refreshActiveCommissionDetail() {
+  const commissionId = activeCommissionDetailId;
+  const cached = getActiveCommissionDetail();
+  if (!commissionId || !cached) return;
+  const requestToken = ++commissionDetailRequestToken;
+  renderCommissionDetailSummary(cached);
+  renderCommissionWorkspace(cached, { loading: true });
+  if (!currentUser) {
+    renderCommissionWorkspace(cached);
+    return;
+  }
+  const [detailResult, bidsResult, invitationsResult] = await Promise.allSettled([
+    apiRequest('/custom/' + encodeURIComponent(commissionId) + '/', { auth: true }),
+    apiRequest('/custom/' + encodeURIComponent(commissionId) + '/bids/', { auth: true }),
+    apiRequest('/custom/' + encodeURIComponent(commissionId) + '/invitations/', { auth: true })
+  ]);
+  if (requestToken !== commissionDetailRequestToken || String(activeCommissionDetailId) !== String(commissionId)) return;
+  let item = cached;
+  if (detailResult.status === 'fulfilled') {
+    item = commissionFromApi(detailResult.value);
+    const index = commissionCache.findIndex(entry => String(entry.id) === String(item.id));
+    if (index >= 0) commissionCache[index] = item;
+    else commissionCache.unshift(item);
+  }
+  if (bidsResult.status === 'fulfilled') {
+    commissionDetailBids = apiList(bidsResult.value).map(normalizeCommissionBid).filter(Boolean);
+  } else {
+    commissionDetailBids = item.myBid ? [item.myBid] : [];
+  }
+  if (invitationsResult.status === 'fulfilled') {
+    commissionDetailInvitations = apiList(invitationsResult.value).map(normalizeCommissionInvitation).filter(Boolean);
+  } else {
+    commissionDetailInvitations = item.myInvitation ? [item.myInvitation] : [];
+  }
+  renderCommissionDetailSummary(item);
+  renderCommissionWorkspace(item, {
+    error: bidsResult.status === 'rejected' || invitationsResult.status === 'rejected'
+  });
+  renderCommissionBoard();
+  if (currentUser) renderMePage();
+}
+
+openCommissionDetail = async function(commissionId) {
+  if (!currentUser) {
+    openAuth('login', '\u8bf7\u5148\u767b\u5f55\u540e\u67e5\u770b\u7ade\u4ef7\u4e0e\u9080\u8bf7\u3002');
+    return;
+  }
+  const item = getCommissions().find(entry => String(entry.id) === String(commissionId))
+    || searchState.results.commissions.find(entry => String(entry.id) === String(commissionId));
+  if (!item) return;
+  activeCommissionDetailId = String(item.id);
+  commissionDetailBids = item.myBid ? [item.myBid] : [];
+  commissionDetailInvitations = item.myInvitation ? [item.myInvitation] : [];
+  commissionSelectedArtist = null;
+  commissionArtistResults = [];
+  commissionArtistSearchQuery = '';
+  commissionArtistSearchError = '';
+  renderCommissionDetailSummary(item);
+  renderCommissionWorkspace(item, { loading: true });
+  document.getElementById('commissionDetail').classList.remove('hidden');
+  await refreshActiveCommissionDetail();
+};
+
+function setCommissionMarketplaceBusy(busy) {
+  commissionActionBusy = busy;
+  const workspace = document.getElementById('commissionWorkspace');
+  workspace?.classList.toggle('is-busy', busy);
+  workspace?.querySelectorAll('button, input, textarea').forEach(element => {
+    element.disabled = busy;
+  });
+}
+
+async function runCommissionMarketplaceAction(task, successMessage) {
+  if (commissionActionBusy || !activeCommissionDetailId) return false;
+  setCommissionMarketplaceBusy(true);
+  try {
+    await task();
+    await refreshCommissions();
+    await refreshActiveCommissionDetail();
+    if (successMessage) alert(successMessage);
+    return true;
+  } catch (error) {
+    alert(error.message || '\u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002');
+    return false;
+  } finally {
+    setCommissionMarketplaceBusy(false);
+  }
+}
+
+async function submitCommissionBid(event) {
+  event.preventDefault();
+  const amount = document.getElementById('commissionBidAmount')?.value.trim() || '';
+  const message = document.getElementById('commissionBidMessage')?.value.trim() || '';
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    alert('\u8bf7\u586b\u5199\u5927\u4e8e 0 \u7684\u62a5\u4ef7\u91d1\u989d\u3002');
+    return;
+  }
+  await runCommissionMarketplaceAction(
+    () => apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/bids/', {
+      method: 'POST',
+      body: JSON.stringify({ amount, message })
+    }),
+    '\u62a5\u4ef7\u5df2\u63d0\u4ea4\uff0c\u53d1\u5e03\u8005\u73b0\u5728\u53ef\u4ee5\u770b\u5230\u3002'
+  );
+}
+
+async function withdrawCommissionBid() {
+  if (!confirm('\u786e\u5b9a\u64a4\u56de\u5f53\u524d\u62a5\u4ef7\u5417\uff1f')) return;
+  await runCommissionMarketplaceAction(
+    () => apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/bids/', { method: 'DELETE' }),
+    '\u62a5\u4ef7\u5df2\u64a4\u56de\u3002'
+  );
+}
+
+async function selectCommissionBid(bidId) {
+  const bid = commissionDetailBids.find(item => String(item.id) === String(bidId));
+  const summary = bid ? bid.artist + ' / ' + formatCommissionAmount(bid.amount) : '\u8be5\u62a5\u4ef7';
+  if (!confirm('\u786e\u5b9a\u9009\u5b9a ' + summary + ' \u5417\uff1f\u9009\u5b9a\u540e\u5c06\u7ed3\u675f\u5176\u4ed6\u7ade\u4ef7\u4e0e\u9080\u8bf7\u3002')) return;
+  await runCommissionMarketplaceAction(
+    () => apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/select-bid/', {
+      method: 'POST',
+      body: JSON.stringify({ bid_id: bidId })
+    }),
+    '\u5df2\u9009\u5b9a\u753b\u5e08\uff0c\u6210\u4ea4\u4ef7\u5df2\u786e\u8ba4\u3002'
+  );
+}
+
+function renderCommissionArtistResults() {
+  const target = document.getElementById('commissionArtistResults');
+  if (!target) return;
+  if (commissionSelectedArtist) {
+    target.innerHTML =
+      '<div class="commission-artist-option selected">' +
+        commissionAvatarHtml(commissionSelectedArtist.avatar, commissionSelectedArtist.username) +
+        '<span><strong>' + escapeHTML(commissionSelectedArtist.displayName || commissionSelectedArtist.username) + '</strong><small>@' + escapeHTML(commissionSelectedArtist.username) + ' \u00b7 \u5df2\u9009\u62e9</small></span>' +
+      '</div>';
+    return;
+  }
+  if (commissionArtistSearchError) {
+    target.innerHTML = '<div class="commission-market-empty compact">' + escapeHTML(commissionArtistSearchError) + '</div>';
+    return;
+  }
+  if (!commissionArtistSearchQuery) {
+    target.innerHTML = '<div class="commission-market-empty compact">\u8f93\u5165\u7528\u6237\u540d\u6216\u6635\u79f0\u641c\u7d22\u753b\u5e08\u3002</div>';
+    return;
+  }
+  if (!commissionArtistResults.length) {
+    target.innerHTML = '<div class="commission-market-empty compact">\u6ca1\u6709\u627e\u5230\u5339\u914d\u753b\u5e08\u3002</div>';
+    return;
+  }
+  target.innerHTML = commissionArtistResults.map(artist =>
+    '<button type="button" class="commission-artist-option" onclick="selectCommissionArtist(\'' + escapeHTML(artist.id) + '\')">' +
+      commissionAvatarHtml(artist.avatar, artist.username) +
+      '<span><strong>' + escapeHTML(artist.displayName || artist.username) + '</strong><small>@' + escapeHTML(artist.username) + (artist.bio ? ' \u00b7 ' + escapeHTML(artist.bio) : '') + '</small></span>' +
+    '</button>'
+  ).join('');
+}
+
+function queueCommissionArtistSearch(value) {
+  const query = String(value || '').replace(/^@/, '').trim();
+  commissionArtistSearchQuery = query;
+  commissionArtistSearchError = '';
+  if (commissionSelectedArtist && query !== commissionSelectedArtist.username) {
+    commissionSelectedArtist = null;
+    const hidden = document.getElementById('commissionArtistId');
+    if (hidden) hidden.value = '';
+  }
+  clearTimeout(commissionArtistSearchTimer);
+  if (!query) {
+    commissionArtistResults = [];
+    renderCommissionArtistResults();
+    return;
+  }
+  const target = document.getElementById('commissionArtistResults');
+  if (target) target.innerHTML = '<div class="commission-market-empty compact">\u6b63\u5728\u641c\u7d22...</div>';
+  commissionArtistSearchTimer = setTimeout(() => searchCommissionArtists(query), 260);
+}
+
+async function searchCommissionArtists(query) {
+  const token = ++commissionArtistSearchToken;
+  try {
+    const data = await apiRequest('/custom/artists/?search=' + encodeURIComponent(query) + '&page_size=20', { auth: true });
+    if (token !== commissionArtistSearchToken || query !== commissionArtistSearchQuery) return;
+    const activeItem = getActiveCommissionDetail();
+    commissionArtistResults = apiList(data)
+      .map(artist => ({
+        id: artist.id,
+        username: artist.username || '',
+        avatar: normalizeImageSrc(artist.avatar || artist.profile?.avatar || ''),
+        displayName: artist.profile?.displayName || artist.first_name || artist.username || '',
+        bio: artist.bio || artist.profile?.signature || artist.profile?.intro || ''
+      }))
+      .filter(artist => artist.id && artist.username && artist.username !== currentUser?.username && artist.username !== activeItem?.requester);
+    commissionArtistSearchError = '';
+  } catch (error) {
+    if (token !== commissionArtistSearchToken) return;
+    commissionArtistResults = [];
+    commissionArtistSearchError = error.message || '\u753b\u5e08\u641c\u7d22\u5931\u8d25\u3002';
+  }
+  renderCommissionArtistResults();
+}
+
+function selectCommissionArtist(artistId) {
+  const artist = commissionArtistResults.find(item => String(item.id) === String(artistId));
+  if (!artist) return;
+  commissionSelectedArtist = artist;
+  commissionArtistSearchQuery = artist.username;
+  const input = document.getElementById('commissionArtistSearch');
+  const hidden = document.getElementById('commissionArtistId');
+  if (input) input.value = '@' + artist.username;
+  if (hidden) hidden.value = artist.id;
+  renderCommissionArtistResults();
+}
+
+async function sendCommissionInvitation(event) {
+  event.preventDefault();
+  const artistId = document.getElementById('commissionArtistId')?.value || commissionSelectedArtist?.id || '';
+  const amount = document.getElementById('commissionInviteAmount')?.value.trim() || '';
+  const message = document.getElementById('commissionInviteMessage')?.value.trim() || '';
+  if (!artistId) {
+    alert('\u8bf7\u5148\u4ece\u641c\u7d22\u7ed3\u679c\u4e2d\u9009\u62e9\u753b\u5e08\u3002');
+    return;
+  }
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    alert('\u8bf7\u586b\u5199\u5927\u4e8e 0 \u7684\u9080\u8bf7\u4ef7\u683c\u3002');
+    return;
+  }
+  const success = await runCommissionMarketplaceAction(
+    () => apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/invitations/', {
+      method: 'POST',
+      body: JSON.stringify({ artist_id: artistId, amount, message })
+    }),
+    '\u5b9a\u5411\u9080\u8bf7\u5df2\u53d1\u9001\u3002'
+  );
+  if (success) {
+    commissionSelectedArtist = null;
+    commissionArtistResults = [];
+    commissionArtistSearchQuery = '';
+    const item = getActiveCommissionDetail();
+    if (item) renderCommissionInviteComposer(item);
+  }
+}
+
+async function respondCommissionInvitation(invitationId, decision) {
+  const verb = decision === 'accept' ? '\u63a5\u53d7' : '\u62d2\u7edd';
+  if (!confirm('\u786e\u5b9a' + verb + '\u8fd9\u4e2a\u5b9a\u5411\u9080\u8bf7\u5417\uff1f')) return;
+  await runCommissionMarketplaceAction(
+    () => apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/respond-invitation/', {
+      method: 'POST',
+      body: JSON.stringify({ invitation_id: invitationId, decision })
+    }),
+    '\u5df2' + verb + '\u9080\u8bf7\u3002'
+  );
+}
+
+document.getElementById('commissionDetailRefresh')?.addEventListener('click', refreshActiveCommissionDetail);
 
 document.getElementById('publishImageBox').addEventListener('click', () => {
   document.getElementById('publishImageInput').click();
@@ -3538,11 +4531,16 @@ document.getElementById('profileSkillInput').addEventListener('keydown', event =
   }
 });
 
-document.getElementById('profileForm').addEventListener('submit', event => {
+document.getElementById('profileHomeTags')?.addEventListener('input', event => {
+  renderHomeTagPreview('profileHomeTagList', splitRecommendationTags(event.target.value));
+});
+
+document.getElementById('profileForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!requireLogin()) return;
   const users = getUsers();
   const user = users[currentUser.username];
+  const homeTags = splitRecommendationTags(document.getElementById('profileHomeTags')?.value || '');
   user.profile = {
     ...user.profile,
     displayName: document.getElementById('profileDisplayNameInput').value.trim() || user.username,
@@ -3552,12 +4550,14 @@ document.getElementById('profileForm').addEventListener('submit', event => {
     signature: document.getElementById('profileSignature').value.trim(),
     intro: document.getElementById('profileSignature').value.trim(),
     philosophy: document.getElementById('profilePhilosophy').value.trim(),
-    skills: [...editingSkills]
+    skills: [...editingSkills],
+    homeTags
   };
   saveUsers(users);
   alert('个人信息已保存。');
   refreshAuthUI();
   renderMePage();
+  await refreshGalleryRecommendations();
 });
 
 document.getElementById('changeByOldPasswordBtn').addEventListener('click', () => {
@@ -3616,6 +4616,939 @@ document.getElementById('contactForm').addEventListener('submit', async event =>
   }
 }, true);
 
+// ===== Public profiles and following =====
+let activePublicProfile = null;
+let publicProfileArtworks = [];
+let publicProfileRequestToken = 0;
+let socialPreviousPage = 'gallery';
+let ownSocialSummary = null;
+let ownSocialSummaryPromise = null;
+let socialSessionUsername = '';
+let socialSessionToken = 0;
+const socialListCache = { followers: [], following: [] };
+
+function resetSocialState() {
+  socialSessionToken += 1;
+  publicProfileRequestToken += 1;
+  activePublicProfile = null;
+  publicProfileArtworks = [];
+  ownSocialSummary = null;
+  ownSocialSummaryPromise = null;
+  socialSessionUsername = '';
+  socialListCache.followers = [];
+  socialListCache.following = [];
+  const followerList = document.getElementById('myFollowerList');
+  const followingList = document.getElementById('myFollowingList');
+  if (followerList) followerList.innerHTML = '<div class="empty-state">登录后查看粉丝。</div>';
+  if (followingList) followingList.innerHTML = '<div class="empty-state">登录后查看关注列表。</div>';
+  const followerCount = document.getElementById('profileFollowerCount');
+  const followingCount = document.getElementById('profileFollowingCount');
+  if (followerCount) followerCount.textContent = '0';
+  if (followingCount) followingCount.textContent = '0';
+}
+
+function normalizePublicUser(item = {}) {
+  const source = item.user || item;
+  const profile = source.profile && typeof source.profile === 'object' ? source.profile : {};
+  const username = source.username || profile.username || '';
+  const displayName = source.display_name || source.displayName || profile.displayName || username || '创作者';
+  const intro = source.intro || source.bio || profile.intro || profile.signature || '';
+  return {
+    id: source.id ?? source.user_id ?? '',
+    username,
+    displayName,
+    avatar: normalizeImageSrc(source.avatar || profile.avatar || ''),
+    bio: source.bio || intro,
+    intro,
+    philosophy: source.philosophy || profile.philosophy || '',
+    skills: Array.isArray(source.skills) ? source.skills : (Array.isArray(profile.skills) ? profile.skills : []),
+    creativeYears: source.creative_years || source.creativeYears || profile.creativeYears || '',
+    artworkCount: Number(source.artwork_count ?? source.artworkCount ?? source.artworks_count ?? 0),
+    followerCount: Number(source.follower_count ?? source.followerCount ?? source.followers_count ?? 0),
+    followingCount: Number(source.following_count ?? source.followingCount ?? 0),
+    isFollowing: !!(source.is_following ?? source.isFollowing ?? source.following),
+    isFollowedBy: !!(source.is_followed_by ?? source.isFollowedBy ?? source.follows_me),
+    isMutual: !!(source.is_mutual ?? source.isMutual ?? source.mutual)
+  };
+}
+
+function mergePublicUser(current, update = {}) {
+  if (!current) return normalizePublicUser(update);
+  const relation = normalizePublicUser({
+    ...current,
+    ...update,
+    display_name: update.display_name ?? current.displayName,
+    creative_years: update.creative_years ?? current.creativeYears,
+    artwork_count: update.artwork_count ?? current.artworkCount,
+    follower_count: update.follower_count ?? current.followerCount,
+    following_count: update.following_count ?? current.followingCount,
+    is_following: update.is_following ?? current.isFollowing,
+    is_followed_by: update.is_followed_by ?? current.isFollowedBy,
+    is_mutual: update.is_mutual ?? current.isMutual
+  });
+  return { ...current, ...relation };
+}
+
+function socialAvatarHtml(user, className = 'social-avatar') {
+  const avatar = normalizeImageSrc(user?.avatar || '');
+  const name = user?.displayName || user?.username || '画';
+  return `<span class="${className}">${avatar
+    ? `<img src="${escapeHTML(avatar)}" alt="${escapeHTML(name)}">`
+    : escapeHTML(String(name).trim().slice(0, 1).toUpperCase() || '画')}</span>`;
+}
+
+function getActivePageId() {
+  return document.querySelector('.page-section.active')?.id || 'home';
+}
+
+function setPublicProfileLoading(identifier) {
+  activePublicProfile = null;
+  publicProfileArtworks = [];
+  setAvatarElement(document.getElementById('publicProfileAvatar'), '', identifier || '画');
+  document.getElementById('publicProfileDisplayName').textContent = '正在加载...';
+  document.getElementById('publicProfileHandle').textContent = identifier ? `@${identifier}` : '@user';
+  document.getElementById('publicProfileBio').textContent = '正在读取公开资料';
+  document.getElementById('publicProfileIntro').textContent = '正在读取简介...';
+  document.getElementById('publicProfilePhilosophy').textContent = '';
+  document.getElementById('publicProfileSkillList').innerHTML = '<span class="tool-item">加载中</span>';
+  ['publicProfileArtworkCount', 'publicProfileFollowerCount', 'publicProfileFollowingCount', 'publicProfileCreativeYears'].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = '0';
+  });
+  document.getElementById('publicProfileArtworkList').innerHTML = '<div class="empty-state">正在加载作品...</div>';
+  document.getElementById('publicProfileFollowBtn').disabled = true;
+  document.getElementById('publicProfileMessageBtn').disabled = true;
+}
+
+function renderPublicProfile() {
+  const user = activePublicProfile;
+  if (!user) return;
+  setAvatarElement(document.getElementById('publicProfileAvatar'), user.avatar, user.displayName);
+  document.getElementById('publicProfileDisplayName').textContent = user.displayName;
+  document.getElementById('publicProfileHandle').textContent = `@${user.username}`;
+  document.getElementById('publicProfileBio').textContent = user.bio || '这个人还没有填写简介。';
+  document.getElementById('publicProfileIntro').textContent = user.intro || '这个人还没有填写简介。';
+  document.getElementById('publicProfilePhilosophy').textContent = user.philosophy
+    ? `创作理念：${user.philosophy}`
+    : '暂未填写创作理念。';
+  renderSkillList('publicProfileSkillList', user.skills || []);
+  document.getElementById('publicProfileArtworkCount').textContent = user.artworkCount || publicProfileArtworks.length || 0;
+  document.getElementById('publicProfileFollowerCount').textContent = user.followerCount;
+  document.getElementById('publicProfileFollowingCount').textContent = user.followingCount;
+  document.getElementById('publicProfileCreativeYears').textContent = user.creativeYears || '0';
+
+  const isSelf = !!currentUser && user.username === currentUser.username;
+  const followButton = document.getElementById('publicProfileFollowBtn');
+  const messageButton = document.getElementById('publicProfileMessageBtn');
+  followButton.hidden = isSelf;
+  followButton.disabled = false;
+  followButton.textContent = user.isFollowing ? '取消关注' : (user.isFollowedBy ? '回关' : '关注');
+  followButton.classList.toggle('secondary', user.isFollowing);
+  messageButton.hidden = isSelf;
+  messageButton.disabled = false;
+  messageButton.textContent = user.isMutual ? '私信 · 互关' : '私信';
+}
+
+function renderPublicProfileArtworks() {
+  const target = document.getElementById('publicProfileArtworkList');
+  if (!target) return;
+  target.innerHTML = publicProfileArtworks.length
+    ? publicProfileArtworks.map(item => `
+      <article class="public-work-card" data-public-artwork="${escapeHTML(item.id)}" tabindex="0">
+        <div class="public-work-media">${item.imageSrc
+          ? `<img src="${escapeHTML(item.imageSrc)}" alt="${escapeHTML(item.name)}">`
+          : '<span>暂无图片</span>'}</div>
+        <div class="public-work-body">
+          <strong>${escapeHTML(item.name)}</strong>
+          <span>${escapeHTML(item.tag || '原创作品')} · 评价 ${Number(item.reviewsCount || 0)}</span>
+        </div>
+      </article>
+    `).join('')
+    : '<div class="empty-state">TA 还没有发布作品。</div>';
+  if (activePublicProfile) {
+    activePublicProfile.artworkCount = Math.max(activePublicProfile.artworkCount, publicProfileArtworks.length);
+    document.getElementById('publicProfileArtworkCount').textContent = activePublicProfile.artworkCount;
+  }
+}
+
+async function openUserProfile(identifier) {
+  const value = String(identifier || '').replace(/^@/, '').trim();
+  if (!value) return;
+  if (currentUser?.username && value === currentUser.username) {
+    closeArtworkDetail();
+    closeInspirationDetail();
+    closeCommissionDetail();
+    switchPage('me');
+    return;
+  }
+  const currentPage = getActivePageId();
+  if (currentPage !== 'userProfile' && currentPage !== 'auth') socialPreviousPage = currentPage;
+  closeArtworkDetail();
+  closeInspirationDetail();
+  closeCommissionDetail();
+  setPublicProfileLoading(value);
+  switchPage('userProfile');
+  const token = ++publicProfileRequestToken;
+  try {
+    const profile = normalizePublicUser(await apiRequest(`/users/profiles/${encodeURIComponent(value)}/`));
+    if (token !== publicProfileRequestToken) return;
+    activePublicProfile = profile;
+    renderPublicProfile();
+    const artworkData = await apiRequest(`/artworks/?owner=${encodeURIComponent(profile.id)}&page_size=100&ordering=-created_at`, { auth: false });
+    if (token !== publicProfileRequestToken) return;
+    publicProfileArtworks = apiList(artworkData).map(artworkToCardData);
+    renderPublicProfileArtworks();
+  } catch (error) {
+    if (token !== publicProfileRequestToken) return;
+    document.getElementById('publicProfileDisplayName').textContent = '无法打开个人主页';
+    document.getElementById('publicProfileBio').textContent = error.message || '用户不存在或暂时无法访问。';
+    document.getElementById('publicProfileArtworkList').innerHTML = '<div class="empty-state">公开资料加载失败，请稍后重试。</div>';
+  }
+}
+
+function openPublicProfileArtwork(artworkId) {
+  const item = publicProfileArtworks.find(entry => String(entry.id) === String(artworkId));
+  if (!item) return;
+  const existing = getGalleryCard(String(item.id));
+  if (existing) return openArtworkDetail(existing);
+  recordView('artwork', item.id);
+  document.getElementById('detailTitle').textContent = item.name;
+  document.getElementById('detailTag').textContent = item.tag;
+  document.getElementById('detailImage').src = item.imageSrc || '';
+  document.getElementById('commentCardId').value = item.id;
+  const owner = document.getElementById('detailOwner');
+  owner.hidden = false;
+  owner.textContent = `作者 @${item.owner}`;
+  owner.dataset.userProfile = item.owner;
+  renderArtworkComments(item.id);
+  document.getElementById('artworkDetail').classList.remove('hidden');
+  startArtworkCommentSync();
+}
+
+async function togglePublicProfileFollow() {
+  if (!activePublicProfile) return;
+  if (!requireLogin('请先登录后再关注创作者。')) return;
+  const button = document.getElementById('publicProfileFollowBtn');
+  button.disabled = true;
+  try {
+    const data = await apiRequest(`/users/profiles/${encodeURIComponent(activePublicProfile.username)}/follow/`, {
+      method: activePublicProfile.isFollowing ? 'DELETE' : 'POST',
+      body: JSON.stringify({})
+    });
+    activePublicProfile = mergePublicUser(activePublicProfile, data);
+    ownSocialSummary = null;
+    socialListCache.followers = [];
+    socialListCache.following = [];
+    renderPublicProfile();
+    ensureOwnSocialSummary(true);
+    refreshConversations({ silent: true });
+  } catch (error) {
+    alert(error.message || '关注操作失败，请稍后重试。');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function ensureOwnSocialSummary(force = false) {
+  if (!currentUser?.username) return null;
+  if (socialSessionUsername !== currentUser.username) {
+    resetSocialState();
+    socialSessionUsername = currentUser.username;
+  }
+  if (ownSocialSummary && !force) return ownSocialSummary;
+  if (ownSocialSummaryPromise) return ownSocialSummaryPromise;
+  const sessionUsername = currentUser.username;
+  const sessionToken = socialSessionToken;
+  const request = apiRequest(`/users/profiles/${encodeURIComponent(sessionUsername)}/`)
+    .then(data => {
+      if (currentUser?.username !== sessionUsername || socialSessionToken !== sessionToken) return null;
+      ownSocialSummary = normalizePublicUser(data);
+      const follower = document.getElementById('profileFollowerCount');
+      const following = document.getElementById('profileFollowingCount');
+      if (follower) follower.textContent = ownSocialSummary.followerCount;
+      if (following) following.textContent = ownSocialSummary.followingCount;
+      return ownSocialSummary;
+    })
+    .catch(error => {
+      if (currentUser?.username === sessionUsername) console.warn('Social summary unavailable:', error);
+      return null;
+    })
+    .finally(() => {
+      if (ownSocialSummaryPromise === request) ownSocialSummaryPromise = null;
+    });
+  ownSocialSummaryPromise = request;
+  return ownSocialSummaryPromise;
+}
+
+function renderSocialList(kind, items = socialListCache[kind]) {
+  const target = document.getElementById(kind === 'followers' ? 'myFollowerList' : 'myFollowingList');
+  if (!target) return;
+  const normalized = items.map(normalizePublicUser).filter(user => user.username);
+  socialListCache[kind] = normalized;
+  target.innerHTML = normalized.length
+    ? normalized.map(user => `
+      <article class="social-user-card">
+        <button class="social-user-main" type="button" data-user-profile="${escapeHTML(user.username)}">
+          ${socialAvatarHtml(user)}
+          <span><strong>${escapeHTML(user.displayName)}</strong><small>@${escapeHTML(user.username)}${user.isMutual ? ' · 已互关' : ''}</small></span>
+        </button>
+        <div class="social-user-actions">
+          <button class="toolbar-btn secondary" type="button" data-message-user="${escapeHTML(user.username)}">私信</button>
+          <button class="toolbar-btn${user.isFollowing ? ' secondary' : ''}" type="button" data-list-follow="${escapeHTML(user.username)}" data-is-following="${String(user.isFollowing)}">${user.isFollowing ? '取消关注' : (user.isFollowedBy ? '回关' : '关注')}</button>
+        </div>
+      </article>
+    `).join('')
+    : `<div class="empty-state">${kind === 'followers' ? '还没有粉丝。' : '还没有关注任何人。'}</div>`;
+}
+
+async function loadSocialList(kind, force = false) {
+  if (!requireLogin('请先登录后查看关注关系。')) return;
+  if (!['followers', 'following'].includes(kind)) return;
+  await ensureOwnSocialSummary();
+  const sessionUsername = currentUser?.username || '';
+  const sessionToken = socialSessionToken;
+  const target = document.getElementById(kind === 'followers' ? 'myFollowerList' : 'myFollowingList');
+  if (socialListCache[kind].length && !force) return renderSocialList(kind);
+  if (target) target.innerHTML = '<div class="empty-state">正在加载...</div>';
+  try {
+    const data = await apiRequest(`/users/${kind}/?page_size=100`);
+    if (currentUser?.username !== sessionUsername || socialSessionToken !== sessionToken) return;
+    socialListCache[kind] = apiList(data).map(normalizePublicUser);
+    renderSocialList(kind);
+    ensureOwnSocialSummary(true);
+  } catch (error) {
+    if (target && currentUser?.username === sessionUsername && socialSessionToken === sessionToken) {
+      target.innerHTML = `<div class="empty-state">${escapeHTML(error.message || '列表加载失败，请稍后重试。')}</div>`;
+    }
+  }
+}
+
+function activateProfileSocialTab(kind) {
+  if (!requireLogin('请先登录后查看关注关系。')) return;
+  switchPage('me');
+  const tab = document.querySelector(`.profile-tab[data-profile-tab="${kind}"]`);
+  if (tab) tab.click();
+  loadSocialList(kind);
+}
+
+async function toggleFollowFromList(username, isFollowing) {
+  if (!requireLogin('请先登录后再关注创作者。')) return;
+  try {
+    await apiRequest(`/users/profiles/${encodeURIComponent(username)}/follow/`, {
+      method: isFollowing ? 'DELETE' : 'POST',
+      body: JSON.stringify({})
+    });
+    ownSocialSummary = null;
+    socialListCache.followers = [];
+    socialListCache.following = [];
+    await Promise.allSettled([ensureOwnSocialSummary(true), loadSocialList(getActiveProfileSocialTab(), true)]);
+    refreshConversations({ silent: true });
+  } catch (error) {
+    alert(error.message || '关注操作失败，请稍后重试。');
+  }
+}
+
+function getActiveProfileSocialTab() {
+  const tab = document.querySelector('.profile-tab.active')?.dataset.profileTab;
+  return ['followers', 'following'].includes(tab) ? tab : 'following';
+}
+
+const profileAwareOpenArtworkDetail = openArtworkDetail;
+openArtworkDetail = function(cardOrId) {
+  const card = typeof cardOrId === 'string' ? getGalleryCard(cardOrId) : cardOrId;
+  const data = getCardData(card);
+  profileAwareOpenArtworkDetail(cardOrId);
+  const owner = document.getElementById('detailOwner');
+  if (!owner || !data?.owner) return;
+  owner.hidden = false;
+  owner.textContent = `作者 @${data.owner}`;
+  owner.dataset.userProfile = data.owner;
+};
+
+const profileAwareRenderCommissionDetail = renderCommissionDetailSummary;
+renderCommissionDetailSummary = function(item) {
+  profileAwareRenderCommissionDetail(item);
+  const requester = document.getElementById('commissionDetailRequester');
+  const artist = document.getElementById('commissionDetailArtist');
+  if (requester && item?.requester) {
+    requester.classList.add('user-profile-link');
+    requester.dataset.userProfile = item.requester;
+  }
+  if (artist) {
+    artist.classList.toggle('user-profile-link', !!item?.artist);
+    if (item?.artist) artist.dataset.userProfile = item.artist;
+    else delete artist.dataset.userProfile;
+  }
+};
+
+const socialAwareRenderMePage = renderMePage;
+renderMePage = function() {
+  socialAwareRenderMePage();
+  if (currentUser) ensureOwnSocialSummary();
+};
+
+const socialAwareSwitchPage = switchPage;
+switchPage = function(pageId) {
+  if (pageId === 'messages' && !requireLogin('请先登录后查看私信。')) return;
+  socialAwareSwitchPage(pageId);
+  document.getElementById('messageNavBtn')?.classList.toggle('active', pageId === 'messages');
+};
+
+document.addEventListener('click', event => {
+  const profileTrigger = event.target.closest('[data-user-profile]');
+  if (profileTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    openUserProfile(profileTrigger.dataset.userProfile);
+    return;
+  }
+  const messageTrigger = event.target.closest('[data-message-user]');
+  if (messageTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    openMessages(messageTrigger.dataset.messageUser);
+    return;
+  }
+  const followTrigger = event.target.closest('[data-list-follow]');
+  if (followTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleFollowFromList(followTrigger.dataset.listFollow, followTrigger.dataset.isFollowing === 'true');
+    return;
+  }
+  const artwork = event.target.closest('[data-public-artwork]');
+  if (artwork) openPublicProfileArtwork(artwork.dataset.publicArtwork);
+}, true);
+
+document.querySelectorAll('[data-social-list]').forEach(button => {
+  button.addEventListener('click', () => activateProfileSocialTab(button.dataset.socialList));
+});
+
+document.querySelectorAll('[data-refresh-social-list]').forEach(button => {
+  button.addEventListener('click', () => loadSocialList(button.dataset.refreshSocialList, true));
+});
+
+document.querySelectorAll('.profile-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    if (['followers', 'following'].includes(tab.dataset.profileTab)) loadSocialList(tab.dataset.profileTab);
+  });
+});
+
+document.getElementById('publicProfileFollowBtn')?.addEventListener('click', togglePublicProfileFollow);
+document.getElementById('publicProfileMessageBtn')?.addEventListener('click', () => {
+  if (activePublicProfile) openMessages(activePublicProfile.username, activePublicProfile);
+});
+document.getElementById('publicProfileBackBtn')?.addEventListener('click', () => {
+  switchPage(document.getElementById(socialPreviousPage)?.classList.contains('page-section') ? socialPreviousPage : 'gallery');
+});
+document.getElementById('publicProfileTopBackBtn')?.addEventListener('click', () => {
+  switchPage(document.getElementById(socialPreviousPage)?.classList.contains('page-section') ? socialPreviousPage : 'gallery');
+});
+
+// ===== Direct messages =====
+let messageConversations = [];
+let activeMessageUser = null;
+let activeMessageItems = [];
+let activeMessagePage = 1;
+let activeMessageHasOlder = false;
+let activeMessageUnlimited = false;
+let activeMessageRemaining = 3;
+let activeMessageLimit = 3;
+let messageThreadToken = 0;
+let messageSendBusy = false;
+let messageSendToken = 0;
+let messageRefreshPromise = null;
+let messageThreadRefreshPromise = null;
+let messageSessionUsername = '';
+let messagePollTimer = null;
+
+function normalizeDirectMessage(item = {}) {
+  const senderUsername = item.sender_username || item.senderUsername || '';
+  return {
+    id: String(item.id || ''),
+    senderId: item.sender || item.sender_id || '',
+    senderUsername,
+    recipientId: item.recipient || item.recipient_id || '',
+    recipientUsername: item.recipient_username || item.recipientUsername || '',
+    body: item.body || '',
+    createdAt: item.created_at || item.createdAt || '',
+    readAt: item.read_at || item.readAt || '',
+    isMine: Boolean(item.is_mine ?? item.isMine ?? (
+      currentUser && (String(item.sender || '') === String(currentUser.id || '') || senderUsername === currentUser.username)
+    ))
+  };
+}
+
+function normalizeConversation(item = {}) {
+  const user = normalizePublicUser(item.user || {});
+  return {
+    user,
+    lastMessage: normalizeDirectMessage(item.last_message || item.lastMessage || {}),
+    lastMessageAt: item.last_message_at || item.lastMessageAt || '',
+    unreadCount: Number(item.unread_count ?? item.unreadCount ?? 0),
+    unlimited: Boolean(item.unlimited),
+    remainingMessages: item.remaining_messages == null ? null : Number(item.remaining_messages),
+    messageLimit: Number(item.message_limit ?? item.messageLimit ?? 3)
+  };
+}
+
+function formatDirectMessageTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString([], { month: '2-digit', day: '2-digit' });
+}
+
+function setMessageUnreadCount(value) {
+  const count = Math.max(0, Number(value || 0));
+  const badge = document.getElementById('messageUnreadBadge');
+  if (!badge) return;
+  badge.hidden = count <= 0;
+  badge.textContent = count > 99 ? '99+' : String(count);
+}
+
+function renderConversationList() {
+  const target = document.getElementById('conversationList');
+  if (!target) return;
+  target.innerHTML = messageConversations.length
+    ? messageConversations.map(item => {
+      const preview = item.lastMessage.body || '开始一段对话';
+      const prefix = item.lastMessage.isMine ? '我：' : '';
+      const active = activeMessageUser && item.user.username === activeMessageUser.username;
+      return `
+        <button class="conversation-item${active ? ' active' : ''}" type="button" data-conversation-user="${escapeHTML(item.user.username)}">
+          <span class="conversation-person">
+            ${socialAvatarHtml(item.user, 'message-avatar')}
+            <span>
+              <strong>${escapeHTML(item.user.displayName)}</strong>
+              <small>@${escapeHTML(item.user.username)}${item.user.isMutual ? ' · 已互关' : ''}</small>
+              <span class="conversation-preview">${escapeHTML(prefix + preview)}</span>
+            </span>
+          </span>
+          <span class="conversation-meta">
+            <time>${escapeHTML(formatDirectMessageTime(item.lastMessageAt || item.lastMessage.createdAt))}</time>
+            ${item.unreadCount ? `<span class="conversation-unread">${item.unreadCount > 99 ? '99+' : item.unreadCount}</span>` : ''}
+          </span>
+        </button>`;
+    }).join('')
+    : '<div class="message-empty"><strong>还没有私信</strong><span>从创作者个人主页发起第一条消息吧。</span></div>';
+}
+
+function renderMessageLimit() {
+  const badge = document.getElementById('messageLimitBadge');
+  const hint = document.getElementById('messageComposerHint');
+  const composer = document.getElementById('messageComposer');
+  const body = document.getElementById('messageBody');
+  const send = document.getElementById('sendMessageBtn');
+  const reached = !activeMessageUnlimited && Number(activeMessageRemaining) <= 0;
+  if (badge) {
+    badge.classList.toggle('unlimited', activeMessageUnlimited);
+    badge.textContent = activeMessageUnlimited
+      ? '互关 · 不限条数'
+      : `剩余 ${Math.max(0, Number(activeMessageRemaining || 0))}/${activeMessageLimit} 条`;
+  }
+  if (hint) {
+    hint.textContent = activeMessageUnlimited
+      ? '你们已互相关注，可以自由发送私信。'
+      : reached
+        ? '本方向的 3 条私信已用完，双方互关后可继续发送。'
+        : `对方尚未与你互关，本方向还可发送 ${Math.max(0, Number(activeMessageRemaining || 0))} 条。`;
+  }
+  composer?.classList.toggle('limit-reached', reached);
+  if (body) body.disabled = reached || messageSendBusy;
+  if (send) send.disabled = reached || messageSendBusy;
+}
+
+function renderMessageThread({ preserveScroll = false, scrollToBottom = false } = {}) {
+  const welcome = document.getElementById('chatWelcome');
+  const active = document.getElementById('chatActive');
+  if (!activeMessageUser) {
+    if (welcome) welcome.hidden = false;
+    if (active) active.hidden = true;
+    document.querySelector('.message-shell')?.classList.remove('chat-open');
+    return;
+  }
+  if (welcome) welcome.hidden = true;
+  if (active) active.hidden = false;
+  document.querySelector('.message-shell')?.classList.add('chat-open');
+  setAvatarElement(document.getElementById('chatAvatar'), activeMessageUser.avatar, activeMessageUser.displayName);
+  document.getElementById('chatDisplayName').textContent = activeMessageUser.displayName;
+  document.getElementById('chatUsername').textContent = `@${activeMessageUser.username}`;
+  const personButton = document.getElementById('chatPersonBtn');
+  if (personButton) personButton.dataset.userProfile = activeMessageUser.username;
+
+  const history = document.getElementById('messageHistory');
+  const previousHeight = history?.scrollHeight || 0;
+  const previousTop = history?.scrollTop || 0;
+  if (history) {
+    history.innerHTML = activeMessageItems.length
+      ? activeMessageItems.map(message => `
+        <div class="message-row${message.isMine ? ' mine' : ''}">
+          ${message.isMine ? '' : socialAvatarHtml(activeMessageUser, 'message-avatar')}
+          <div class="message-bubble">
+            <span>${escapeHTML(message.body)}</span>
+            <time>${escapeHTML(formatCommissionTime(message.createdAt))}${message.isMine ? ` · ${message.readAt ? '已读' : '已发送'}` : ''}</time>
+          </div>
+        </div>`).join('')
+      : '<div class="message-empty"><strong>还没有消息</strong><span>打个招呼开始交流吧。</span></div>';
+    if (preserveScroll) history.scrollTop = Math.max(0, history.scrollHeight - previousHeight + previousTop);
+    else if (scrollToBottom) history.scrollTop = history.scrollHeight;
+  }
+  const older = document.getElementById('loadOlderMessagesBtn');
+  if (older) older.hidden = !activeMessageHasOlder;
+  renderMessageLimit();
+  renderConversationList();
+}
+
+function resetMessagingState() {
+  messageConversations = [];
+  activeMessageUser = null;
+  activeMessageItems = [];
+  activeMessagePage = 1;
+  activeMessageHasOlder = false;
+  activeMessageUnlimited = false;
+  activeMessageRemaining = 3;
+  activeMessageLimit = 3;
+  messageSendBusy = false;
+  messageSendToken += 1;
+  messageRefreshPromise = null;
+  messageThreadRefreshPromise = null;
+  messageSessionUsername = '';
+  messageThreadToken += 1;
+  if (messagePollTimer) clearInterval(messagePollTimer);
+  messagePollTimer = null;
+  setMessageUnreadCount(0);
+  const draft = document.getElementById('messageBody');
+  if (draft) draft.value = '';
+  renderConversationList();
+  renderMessageThread();
+}
+
+function ensureMessageSession() {
+  const username = currentUser?.username || '';
+  if (messageSessionUsername !== username) {
+    resetMessagingState();
+    messageSessionUsername = username;
+  }
+  return !!username;
+}
+
+async function refreshConversations({ silent = false } = {}) {
+  if (!ensureMessageSession()) return [];
+  if (messageRefreshPromise) return messageRefreshPromise;
+  const sessionUsername = currentUser.username;
+  const target = document.getElementById('conversationList');
+  if (!silent && target && !messageConversations.length) {
+    target.innerHTML = '<div class="message-empty">正在加载会话...</div>';
+  }
+
+  const request = apiRequest('/users/messages/conversations/?page_size=100')
+    .then(data => {
+      if (currentUser?.username !== sessionUsername || messageSessionUsername !== sessionUsername) return [];
+      messageConversations = apiList(data).map(normalizeConversation).filter(item => item.user.username);
+      setMessageUnreadCount(data?.total_unread_count ?? messageConversations.reduce((sum, item) => sum + item.unreadCount, 0));
+      if (activeMessageUser) {
+        const current = messageConversations.find(item => item.user.username === activeMessageUser.username);
+        if (current) {
+          activeMessageUser = mergePublicUser(activeMessageUser, current.user);
+          activeMessageUnlimited = current.unlimited;
+          activeMessageRemaining = current.remainingMessages;
+          activeMessageLimit = current.messageLimit;
+        }
+      }
+      renderConversationList();
+      if (activeMessageUser) renderMessageLimit();
+      return messageConversations;
+    })
+    .catch(error => {
+      if (!silent && target && currentUser?.username === sessionUsername) {
+        target.innerHTML = `<div class="message-empty"><strong>会话加载失败</strong><span>${escapeHTML(error.message || '请稍后重试。')}</span></div>`;
+      }
+      if (silent) console.warn('Conversation refresh failed:', error);
+      return [];
+    })
+    .finally(() => {
+      if (messageRefreshPromise === request) messageRefreshPromise = null;
+    });
+  messageRefreshPromise = request;
+  return request;
+}
+
+async function openMessages(identifier = '', userHint = null) {
+  if (!requireLogin('请先登录后使用私信功能。')) return;
+  ensureMessageSession();
+  switchPage('messages');
+  await refreshConversations({ silent: true });
+  const username = String(identifier || '').replace(/^@/, '').trim();
+  if (username) await loadMessageThread(username, 1, false, userHint);
+  else renderMessageThread();
+}
+
+function mergeMessageItems(olderItems, newerItems) {
+  const seen = new Set();
+  return [...olderItems, ...newerItems].filter(message => {
+    const key = message.id || `${message.senderUsername}:${message.recipientUsername}:${message.createdAt}:${message.body}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function markActiveConversationRead(username, token) {
+  try {
+    await apiRequest(`/users/messages/${encodeURIComponent(username)}/read/`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+    if (token === messageThreadToken && activeMessageUser?.username === username) {
+      await refreshConversations({ silent: true });
+    }
+  } catch (error) {
+    console.warn('Unable to mark messages as read:', error);
+  }
+}
+
+async function loadMessageThread(identifier, page = 1, prepend = false, userHint = null) {
+  if (!ensureMessageSession()) return;
+  const username = String(identifier || '').replace(/^@/, '').trim();
+  if (!username || username === currentUser.username) return;
+  messageSendToken += 1;
+  messageSendBusy = false;
+  const token = ++messageThreadToken;
+  const normalizedPage = Math.max(1, Number(page) || 1);
+  const knownConversation = messageConversations.find(item => item.user.username === username);
+
+  if (normalizedPage === 1) {
+    if (activeMessageUser?.username !== username) {
+      const draft = document.getElementById('messageBody');
+      if (draft) draft.value = '';
+    }
+    activeMessageUser = userHint
+      ? normalizePublicUser(userHint)
+      : (knownConversation?.user || normalizePublicUser({ username, display_name: username }));
+    activeMessageItems = [];
+    activeMessagePage = 1;
+    activeMessageHasOlder = false;
+    activeMessageUnlimited = knownConversation?.unlimited || false;
+    activeMessageRemaining = knownConversation?.remainingMessages ?? 3;
+    activeMessageLimit = knownConversation?.messageLimit || 3;
+    renderMessageThread();
+    const history = document.getElementById('messageHistory');
+    if (history) history.innerHTML = '<div class="message-empty">正在加载消息...</div>';
+  } else {
+    const olderButton = document.getElementById('loadOlderMessagesBtn');
+    if (olderButton) {
+      olderButton.disabled = true;
+      olderButton.textContent = '正在加载...';
+    }
+  }
+
+  try {
+    const data = await apiRequest(`/users/messages/${encodeURIComponent(username)}/?page=${normalizedPage}&page_size=50`);
+    if (token !== messageThreadToken || currentUser?.username !== messageSessionUsername) return;
+    const responseUser = normalizePublicUser(data?.user || { username });
+    activeMessageUser = activeMessageUser
+      ? mergePublicUser(activeMessageUser, responseUser)
+      : responseUser;
+    const incoming = apiList(data?.messages).map(normalizeDirectMessage);
+    activeMessageItems = prepend
+      ? mergeMessageItems(incoming, activeMessageItems)
+      : mergeMessageItems([], incoming);
+    activeMessagePage = normalizedPage;
+    activeMessageHasOlder = !!data?.messages?.next;
+    activeMessageUnlimited = Boolean(data?.unlimited);
+    activeMessageRemaining = data?.remaining_messages == null ? null : Number(data.remaining_messages);
+    activeMessageLimit = Number(data?.message_limit || 3);
+    renderMessageThread({ preserveScroll: prepend, scrollToBottom: !prepend });
+    if (normalizedPage === 1) void markActiveConversationRead(username, token);
+  } catch (error) {
+    if (token !== messageThreadToken) return;
+    const history = document.getElementById('messageHistory');
+    if (history) {
+      history.innerHTML = `<div class="message-empty"><strong>消息加载失败</strong><span>${escapeHTML(error.message || '请稍后重试。')}</span></div>`;
+    }
+  } finally {
+    if (token === messageThreadToken) {
+      const olderButton = document.getElementById('loadOlderMessagesBtn');
+      if (olderButton) {
+        olderButton.disabled = false;
+        olderButton.textContent = '加载更早消息';
+      }
+    }
+  }
+}
+
+async function loadOlderMessages() {
+  if (!activeMessageUser || !activeMessageHasOlder) return;
+  await loadMessageThread(activeMessageUser.username, activeMessagePage + 1, true, activeMessageUser);
+}
+
+async function sendDirectMessage(event) {
+  event?.preventDefault();
+  if (!activeMessageUser || messageSendBusy) return;
+  const input = document.getElementById('messageBody');
+  const body = String(input?.value || '').trim();
+  if (!body) {
+    input?.focus();
+    return;
+  }
+  const sessionUsername = currentUser?.username || '';
+  const recipientUsername = activeMessageUser.username;
+  const threadToken = messageThreadToken;
+  const sendToken = ++messageSendToken;
+  const isCurrentSend = () => (
+    sendToken === messageSendToken
+    && threadToken === messageThreadToken
+    && currentUser?.username === sessionUsername
+    && activeMessageUser?.username === recipientUsername
+  );
+  messageSendBusy = true;
+  renderMessageLimit();
+  try {
+    const data = await apiRequest(`/users/messages/${encodeURIComponent(recipientUsername)}/`, {
+      method: 'POST',
+      body: JSON.stringify({ body })
+    });
+    if (!isCurrentSend()) {
+      if (currentUser?.username === sessionUsername) refreshConversations({ silent: true });
+      return;
+    }
+    const message = normalizeDirectMessage(data?.message || {});
+    if (message.id && !activeMessageItems.some(item => item.id === message.id)) activeMessageItems.push(message);
+    activeMessageUnlimited = Boolean(data?.unlimited);
+    activeMessageRemaining = data?.remaining_messages == null ? null : Number(data.remaining_messages);
+    activeMessageLimit = Number(data?.message_limit || 3);
+    if (input) input.value = '';
+    renderMessageThread({ scrollToBottom: true });
+    await refreshConversations({ silent: true });
+  } catch (error) {
+    if (!isCurrentSend()) return;
+    const state = error.data && typeof error.data === 'object' ? error.data : {};
+    if ('unlimited' in state) activeMessageUnlimited = Boolean(state.unlimited);
+    if ('remaining_messages' in state) {
+      activeMessageRemaining = state.remaining_messages == null ? null : Number(state.remaining_messages);
+    }
+    if ('message_limit' in state) activeMessageLimit = Number(state.message_limit || 3);
+    alert(error.message || '私信发送失败，请稍后重试。');
+  } finally {
+    if (!isCurrentSend()) return;
+    messageSendBusy = false;
+    renderMessageLimit();
+    input?.focus();
+  }
+}
+
+async function refreshActiveMessageThread() {
+  if (messageThreadRefreshPromise || !currentUser || !activeMessageUser || getActivePageId() !== 'messages') {
+    return messageThreadRefreshPromise;
+  }
+  const sessionUsername = currentUser.username;
+  const recipientUsername = activeMessageUser.username;
+  const threadToken = messageThreadToken;
+  const history = document.getElementById('messageHistory');
+  const previousTop = history?.scrollTop || 0;
+  const wasNearBottom = !history || history.scrollHeight - history.scrollTop - history.clientHeight < 90;
+
+  const request = apiRequest(`/users/messages/${encodeURIComponent(recipientUsername)}/?page=1&page_size=50`)
+    .then(data => {
+      if (
+        currentUser?.username !== sessionUsername
+        || activeMessageUser?.username !== recipientUsername
+        || messageThreadToken !== threadToken
+      ) return;
+      const incoming = apiList(data?.messages).map(normalizeDirectMessage);
+      const indexes = new Map(activeMessageItems.map((message, index) => [message.id, index]));
+      incoming.forEach(message => {
+        if (message.id && indexes.has(message.id)) {
+          const index = indexes.get(message.id);
+          activeMessageItems[index] = { ...activeMessageItems[index], ...message };
+        } else {
+          indexes.set(message.id, activeMessageItems.length);
+          activeMessageItems.push(message);
+        }
+      });
+      activeMessageUser = mergePublicUser(activeMessageUser, data?.user || {});
+      activeMessageUnlimited = Boolean(data?.unlimited);
+      activeMessageRemaining = data?.remaining_messages == null ? null : Number(data.remaining_messages);
+      activeMessageLimit = Number(data?.message_limit || 3);
+      if (activeMessagePage === 1) activeMessageHasOlder = !!data?.messages?.next;
+      renderMessageThread({ scrollToBottom: wasNearBottom });
+      if (!wasNearBottom && history) history.scrollTop = previousTop;
+      if (incoming.some(message => !message.isMine && !message.readAt)) {
+        void markActiveConversationRead(recipientUsername, threadToken);
+      }
+    })
+    .catch(error => console.warn('Active conversation refresh failed:', error))
+    .finally(() => {
+      if (messageThreadRefreshPromise === request) messageThreadRefreshPromise = null;
+    });
+  messageThreadRefreshPromise = request;
+  return request;
+}
+
+function startMessagePolling() {
+  if (messagePollTimer || !currentUser) return;
+  messagePollTimer = setInterval(async () => {
+    if (!currentUser || document.visibilityState === 'hidden') return;
+    await refreshConversations({ silent: true });
+    await refreshActiveMessageThread();
+  }, 30000);
+}
+
+document.getElementById('messageNavBtn')?.addEventListener('click', () => openMessages());
+document.getElementById('refreshConversationsBtn')?.addEventListener('click', async () => {
+  await refreshConversations();
+  if (activeMessageUser) await loadMessageThread(activeMessageUser.username, 1, false, activeMessageUser);
+});
+document.getElementById('messageComposer')?.addEventListener('submit', sendDirectMessage);
+document.getElementById('messageBody')?.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    document.getElementById('messageComposer')?.requestSubmit();
+  }
+});
+document.getElementById('loadOlderMessagesBtn')?.addEventListener('click', loadOlderMessages);
+document.getElementById('chatBackBtn')?.addEventListener('click', () => {
+  document.querySelector('.message-shell')?.classList.remove('chat-open');
+});
+document.getElementById('conversationList')?.addEventListener('click', event => {
+  const item = event.target.closest('[data-conversation-user]');
+  if (item) loadMessageThread(item.dataset.conversationUser);
+});
+
+const directMessageSwitchPage = switchPage;
+switchPage = function(pageId) {
+  const result = directMessageSwitchPage(pageId);
+  if (pageId === 'messages' && currentUser) {
+    ensureMessageSession();
+    startMessagePolling();
+    refreshConversations({ silent: true });
+  }
+  return result;
+};
+
+const directMessageClearSession = clearSession;
+clearSession = function() {
+  directMessageClearSession();
+  resetSocialState();
+  resetMessagingState();
+};
+
+const directMessageRefreshAuthUI = refreshAuthUI;
+refreshAuthUI = function() {
+  directMessageRefreshAuthUI();
+  if (currentUser) {
+    ensureMessageSession();
+    startMessagePolling();
+    refreshConversations({ silent: true });
+  } else {
+    resetMessagingState();
+  }
+};
+
 const observer = new IntersectionObserver(entries => {
   entries.forEach(entry => {
     if (entry.isIntersecting) entry.target.classList.add('visible');
@@ -3653,424 +5586,411 @@ window.addEventListener('DOMContentLoaded', async () => {
   switchPage(document.getElementById(normalizedInitialPage)?.classList.contains('page-section') ? normalizedInitialPage : 'home');
 });
 
-let currentChatConversationId = null;
-let isChatLoading = false;
+// AI creation assistant (OpenAI-compatible API through the Django backend).
+const AI_CONFIG_KEY = 'starSakuraAiConfig';
+const AI_CHATS_KEY = 'starSakuraAiChats';
+const AI_GREETING = '你好！我是星漫 AI 创作助手。可以陪你聊天、推荐站内画师/作品/委托，也能一起构思创作灵感。';
+let aiHistory = [];
+let aiBusy = false;
+let aiChats = [];
+let aiActiveChatId = '';
+let aiChatStorageOwner = '';
+let aiImageData = '';
+let aiImageName = '';
 
-async function sendChatMessage(text) {
-  if (!text) {
-    text = document.getElementById('chatInput').value.trim();
-  }
-  if (!text || isChatLoading) return;
-  
-  document.getElementById('chatInput').value = '';
-  isChatLoading = true;
-  document.getElementById('chatSendBtn').disabled = true;
-  
-  const messagesContainer = document.getElementById('chatMessages');
-  const welcome = messagesContainer.querySelector('.chat-welcome');
-  if (welcome) {
-    welcome.remove();
-  }
-  
-  appendChatMessage('user', text);
-  
+function getAIConfig() {
+  try { return JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || '{}'); } catch { return {}; }
+}
+
+function getAIChatStorageKey() {
+  return `${AI_CHATS_KEY}:${currentUser?.username || 'guest'}`;
+}
+
+function createAIChat() {
+  const now = Date.now();
+  return { id: `chat-${now}-${Math.random().toString(36).slice(2, 7)}`, title: '新对话', messages: [], updatedAt: now };
+}
+
+function saveAIChats() {
+  if (!currentUser) return;
+  const safeChats = aiChats.slice(0, 30).map(chat => ({
+    ...chat,
+    messages: (chat.messages || []).slice(-60).map(message => ({
+      ...message,
+      recommendations: (message.recommendations || []).map(item => ({
+        ...item,
+        image_url: String(item.image_url || '').startsWith('data:') ? '' : item.image_url
+      }))
+    }))
+  }));
   try {
-    await sendChatMessageStream(text);
-    await loadChatConversations();
+    localStorage.setItem(getAIChatStorageKey(), JSON.stringify(safeChats));
   } catch (error) {
-    appendChatMessage('ai', `抱歉，我暂时无法回复您的消息。${error.message || ''}`);
-    console.error('Chat error:', error);
-  } finally {
-    isChatLoading = false;
-    document.getElementById('chatSendBtn').disabled = false;
+    console.warn('AI chat history could not be saved:', error);
   }
 }
 
-async function sendChatMessageStream(text, retryCount = 0) {
-  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
-  const headers = {
-    'Content-Type': 'application/json',
-  };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  
-  console.log('=== Chat Stream Request ===');
-  console.log('URL:', `${API_BASE}/recommend/chat/stream/`);
-  console.log('Headers:', headers);
-  console.log('Body:', JSON.stringify({ conversation_id: currentChatConversationId, content: text }));
-  console.log('Token exists:', !!token);
-  console.log('Retry count:', retryCount);
-  
-  const response = await fetch(`${API_BASE}/recommend/chat/stream/`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      conversation_id: currentChatConversationId,
-      content: text
-    })
-  });
-  
-  console.log('Response status:', response.status);
-  console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-  
-  if (response.status === 401 && retryCount === 0) {
-    const newToken = await refreshToken();
-    if (newToken) {
-      return sendChatMessageStream(text, 1);
-    }
-    clearSession();
-    throw new Error('登录已过期，请重新登录');
-  }
-  
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: '请求失败' }));
-    throw new Error(error.message || '请求失败');
-  }
-  
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  let aiMessageDiv = null;
-  let fullContent = '';
-  
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n\n');
-    buffer = lines.pop() || '';
-    
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      
-      const dataStr = line.slice(6);
-      if (dataStr === '[DONE]') continue;
-      
-      try {
-        const data = JSON.parse(dataStr);
-        
-        if (data.conversation_id) {
-          currentChatConversationId = data.conversation_id;
-        }
-        
-        if (data.content) {
-          fullContent += data.content;
-          if (!aiMessageDiv) {
-            aiMessageDiv = createAiMessage();
-          }
-          aiMessageDiv.querySelector('.msg-bubble').textContent += data.content;
-          document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
-        }
-        
-        if (data.done && aiMessageDiv) {
-          if (data.artworks && Array.isArray(data.artworks) && data.artworks.length > 0) {
-            renderArtworkCardsDirectly(aiMessageDiv, data.artworks);
-          } else {
-            await renderArtworkCardsInMessage(aiMessageDiv, fullContent);
-          }
-          return;
-        }
-      } catch (e) {
-        console.warn('SSE parse error:', e);
+function getActiveAIChat() {
+  return aiChats.find(chat => chat.id === aiActiveChatId) || null;
+}
+
+function formatAIChatTime(timestamp) {
+  const date = new Date(Number(timestamp) || Date.now());
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+function renderAIConversationList() {
+  const target = document.getElementById('aiConversationList');
+  if (!target) return;
+  target.innerHTML = aiChats.length ? aiChats.map(chat => `
+    <div class="ai-conversation-item ${chat.id === aiActiveChatId ? 'active' : ''}">
+      <button type="button" class="ai-conversation-open" data-ai-chat-id="${escapeHTML(chat.id)}">
+        <strong>${escapeHTML(chat.title || '新对话')}</strong>
+        <small>${formatAIChatTime(chat.updatedAt)}</small>
+      </button>
+      <button type="button" class="ai-conversation-delete" data-ai-chat-delete="${escapeHTML(chat.id)}" aria-label="删除聊天">×</button>
+    </div>`).join('') : '<div class="ai-history-empty">暂无聊天记录</div>';
+}
+
+function renderActiveAIChat() {
+  const chat = getActiveAIChat();
+  const target = document.getElementById('aiMessages');
+  if (!target) return;
+  target.innerHTML = '';
+  document.getElementById('aiChatTitle').textContent = chat?.title || '新对话';
+  if (!chat?.messages?.length) {
+    addAIMessage('assistant', AI_GREETING);
+  } else {
+    chat.messages.forEach(entry => {
+      addAIMessage(entry.role, entry.content);
+      if (entry.role === 'user' && entry.hasImage) addAIImageMarker(entry.imageName || '已上传作品图片');
+      if (entry.role === 'assistant') {
+        addAIRecommendations(entry.recommendations || []);
+        addAISources(entry.sources || [], entry.webSearchUsed);
       }
-    }
-  }
-}
-
-function renderArtworkCardsDirectly(messageDiv, artworks) {
-  const bubble = messageDiv.querySelector('.msg-bubble');
-  let htmlContent = bubble.textContent;
-  
-  console.log('Artworks data:', artworks);
-  
-  const cardsHtml = artworks.map(artwork => {
-    let imgUrl = artwork.image_url || artwork.image || '';
-    if (imgUrl) {
-      if (imgUrl.startsWith('http://127.0.0.1:8000/media/')) {
-        imgUrl = imgUrl.replace('http://127.0.0.1:8000/media/', '/media/');
-      } else if (imgUrl.startsWith('http://127.0.0.1:8000/')) {
-        imgUrl = imgUrl.replace('http://127.0.0.1:8000/', '/');
-      } else if (imgUrl.startsWith('http')) {
-      } else if (!imgUrl.startsWith('/')) {
-        imgUrl = '/' + imgUrl;
-      }
-    }
-    console.log('Artwork:', artwork.title, '- Image URL:', imgUrl);
-    return `<div class="artwork-card" data-id="${artwork.id}" onclick="openArtworkById(${artwork.id})">
-      <div class="artwork-card-img-wrapper">
-        <img src="${imgUrl}" alt="${escapeHtml(artwork.title)}" class="artwork-card-img" onerror="this.style.display='none'; console.log('Image load failed:', this.src);">
-      </div>
-      <div class="artwork-card-info">
-        <div class="artwork-card-title">${escapeHtml(artwork.title)}</div>
-        <div class="artwork-card-category">${escapeHtml(artwork.category || '')}</div>
-        <div class="artwork-card-price">¥${artwork.price}</div>
-      </div>
-    </div>`;
-  }).join('');
-  
-  htmlContent = htmlContent.replace(/\n/g, '<br>') + '<div class="artwork-cards-container">' + cardsHtml + '</div>';
-  bubble.innerHTML = htmlContent;
-  
-  document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
-}
-
-async function renderArtworkCardsInMessage(messageDiv, content) {
-  const artworkIds = [];
-  const regex = /\[作品:(\d+)\]/g;
-  let match;
-  while ((match = regex.exec(content)) !== null) {
-    artworkIds.push(parseInt(match[1]));
-  }
-  
-  if (artworkIds.length === 0) return;
-  
-  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  
-  try {
-    const response = await fetch(`${API_BASE}/artworks/?id__in=${artworkIds.join(',')}`, { headers });
-    if (!response.ok) return;
-    
-    const data = await response.json();
-    const results = data.data || data;
-    const artworks = Array.isArray(results.results) ? results.results : (Array.isArray(results) ? results : []);
-    const artworkMap = {};
-    artworks.forEach(art => {
-      artworkMap[art.id] = art;
     });
-    
-    const bubble = messageDiv.querySelector('.msg-bubble');
-    let htmlContent = content;
-    
-    htmlContent = htmlContent.replace(/\[作品:(\d+)\]/g, (_, id) => {
-          const artwork = artworkMap[parseInt(id)];
-          if (!artwork) return '';
-          
-          const imgUrl = normalizeImageSrc(artwork.image_url || artwork.image || '');
-          return `<div class="artwork-card" data-id="${artwork.id}" onclick="openArtworkById(${artwork.id})">
-        <div class="artwork-card-img-wrapper">
-          <img src="${imgUrl}" alt="${escapeHtml(artwork.title)}" class="artwork-card-img">
-        </div>
-        <div class="artwork-card-info">
-          <div class="artwork-card-title">${escapeHtml(artwork.title)}</div>
-          <div class="artwork-card-category">${escapeHtml(artwork.category || '')}</div>
-          <div class="artwork-card-price">¥${artwork.price}</div>
-        </div>
-      </div>`;
-        });
-    
-    htmlContent = htmlContent.replace(/\n/g, '<br>');
-    bubble.innerHTML = htmlContent;
-    
-  } catch (e) {
-    console.error('Failed to render artwork cards:', e);
   }
+  aiHistory = (chat?.messages || []).map(({ role, content }) => ({ role, content })).slice(-12);
+  renderAIConversationList();
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-async function openArtworkById(artworkId) {
-  const token = currentUser?.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
-  const headers = {};
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  
+function ensureAIChatState(force = false) {
+  const owner = currentUser?.username || 'guest';
+  if (!force && aiChatStorageOwner === owner && aiChats.length) return;
+  aiChatStorageOwner = owner;
   try {
-    const response = await fetch(`${API_BASE}/artworks/${artworkId}/`, { headers });
-    if (!response.ok) return;
-    
-    const result = await response.json();
-    const artwork = result.data || result;
-    recordView('artwork', artworkId);
-    
-    document.getElementById('detailTitle').textContent = artwork.title;
-    document.getElementById('detailTag').textContent = artwork.category || '原创作品';
-    document.getElementById('detailImage').src = normalizeImageSrc(artwork.image_url || artwork.image || '');
-    document.getElementById('commentCardId').value = artworkId;
-    document.getElementById('commentText').value = '';
-    document.getElementById('commentImageInput').value = '';
-    document.getElementById('commentImageName').textContent = '';
-    commentImageSrc = '';
-    
-    renderArtworkComments(artworkId);
-    document.getElementById('artworkDetail').classList.remove('hidden');
-    startArtworkCommentSync();
-  } catch (e) {
-    console.error('Failed to open artwork:', e);
+    const stored = currentUser ? JSON.parse(localStorage.getItem(getAIChatStorageKey()) || '[]') : [];
+    aiChats = Array.isArray(stored) ? stored : [];
+  } catch {
+    aiChats = [];
+  }
+  if (!aiChats.length) aiChats = [createAIChat()];
+  aiChats.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  aiActiveChatId = aiChats[0].id;
+  renderActiveAIChat();
+}
+
+function startNewAIChat() {
+  if (aiBusy) return;
+  clearAIImage();
+  const chat = createAIChat();
+  aiChats.unshift(chat);
+  aiActiveChatId = chat.id;
+  saveAIChats();
+  renderActiveAIChat();
+  document.getElementById('aiInput')?.focus();
+}
+
+function selectAIChat(chatId) {
+  if (aiBusy || !aiChats.some(chat => chat.id === chatId)) return;
+  clearAIImage();
+  aiActiveChatId = chatId;
+  renderActiveAIChat();
+}
+
+function deleteAIChat(chatId) {
+  if (aiBusy) return;
+  if (!window.confirm('确定删除这条聊天记录吗？')) return;
+  aiChats = aiChats.filter(chat => chat.id !== chatId);
+  if (!aiChats.length) aiChats = [createAIChat()];
+  if (!aiChats.some(chat => chat.id === aiActiveChatId)) aiActiveChatId = aiChats[0].id;
+  saveAIChats();
+  renderActiveAIChat();
+}
+
+function addAIMessage(role, content, extraClass = '') {
+  const list = document.getElementById('aiMessages');
+  if (!list) return null;
+  const bubble = document.createElement('div');
+  bubble.className = `ai-message ${role} ${extraClass}`.trim();
+  bubble.textContent = content;
+  list.appendChild(bubble);
+  list.scrollTop = list.scrollHeight;
+  return bubble;
+}
+
+function addAIRecommendations(items = []) {
+  const list = document.getElementById('aiMessages');
+  if (!list || !Array.isArray(items) || !items.length) return;
+  const previews = document.createElement('div');
+  previews.className = 'ai-recommendations';
+  previews.innerHTML = items.map(item => {
+    const image = normalizeImageSrc(item.image_url || '');
+    const fallback = item.type === 'artist'
+      ? escapeHTML(String(item.title || item.username || '画').slice(0, 1).toUpperCase())
+      : (item.type === 'commission' ? '委' : '画');
+    return `
+      <button class="ai-reference-card" type="button" data-ai-reference-type="${escapeHTML(item.type)}" data-ai-reference-id="${escapeHTML(item.id)}" data-ai-reference-username="${escapeHTML(item.username || '')}">
+        <span class="ai-reference-media ${item.type === 'artist' ? 'artist' : ''}">${image
+          ? `<img src="${escapeHTML(image)}" alt="${escapeHTML(item.title || '')}">`
+          : `<span>${fallback}</span>`}</span>
+        <span class="ai-reference-copy">
+          <strong>${escapeHTML(item.title || '')}</strong>
+          <small>${escapeHTML(item.subtitle || '')}</small>
+          <em>${item.type === 'artist' ? '查看画师主页' : (item.type === 'commission' ? '查看委托详情' : '查看作品')}</em>
+        </span>
+      </button>`;
+  }).join('');
+  list.appendChild(previews);
+  list.scrollTop = list.scrollHeight;
+}
+
+function addAIImageMarker(name = '已上传作品图片', imageSrc = '') {
+  const list = document.getElementById('aiMessages');
+  if (!list) return;
+  const marker = document.createElement('div');
+  marker.className = 'ai-uploaded-image-marker';
+  marker.innerHTML = imageSrc
+    ? `<img src="${escapeHTML(imageSrc)}" alt="${escapeHTML(name)}"><span>${escapeHTML(name)}</span>`
+    : `<span>🖼 ${escapeHTML(name)}</span>`;
+  list.appendChild(marker);
+  list.scrollTop = list.scrollHeight;
+}
+
+function safeAISourceUrl(value = '') {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
   }
 }
 
-function createAiMessage() {
-  const messagesContainer = document.getElementById('chatMessages');
-  const messageDiv = document.createElement('div');
-  messageDiv.className = 'chat-message ai';
-  
-  const avatar = document.createElement('div');
-  avatar.className = 'msg-avatar';
-  avatar.textContent = '🤖';
-  
-  const bubble = document.createElement('div');
-  bubble.className = 'msg-bubble';
-  bubble.textContent = '';
-  
-  const time = document.createElement('div');
-  time.className = 'msg-time';
-  const now = new Date();
-  time.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-  
-  messageDiv.appendChild(avatar);
-  messageDiv.appendChild(bubble);
-  messageDiv.appendChild(time);
-  
-  messagesContainer.appendChild(messageDiv);
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  
-  return messageDiv;
+function addAISources(items = [], webSearchUsed = false) {
+  const list = document.getElementById('aiMessages');
+  if (!list || (!webSearchUsed && !items.length)) return;
+  const block = document.createElement('section');
+  block.className = 'ai-source-block';
+  const validItems = (Array.isArray(items) ? items : []).filter(item => safeAISourceUrl(item.url));
+  block.innerHTML = `
+    <div class="ai-source-head"><span>⌕</span><strong>${validItems.length ? `联网参考资料 · ${validItems.length}` : '已尝试联网检索，暂无可展示来源'}</strong></div>
+    ${validItems.length ? `<div class="ai-source-list">${validItems.map(item => `
+      <a href="${escapeHTML(safeAISourceUrl(item.url))}" target="_blank" rel="noopener noreferrer">
+        <strong>${escapeHTML(item.title || item.site || '参考资料')}</strong>
+        <small>${escapeHTML([item.site, item.published_at].filter(Boolean).join(' · '))}</small>
+        ${item.snippet ? `<span>${escapeHTML(item.snippet)}</span>` : ''}
+      </a>`).join('')}</div>` : ''}`;
+  list.appendChild(block);
+  list.scrollTop = list.scrollHeight;
 }
 
-function appendChatMessage(role, content) {
-  const messagesContainer = document.getElementById('chatMessages');
-  const messageDiv = document.createElement('div');
-  messageDiv.className = `chat-message ${role}`;
-  
-  const avatar = document.createElement('div');
-  avatar.className = 'msg-avatar';
-  avatar.textContent = role === 'user' ? '👤' : '🤖';
-  
-  const bubble = document.createElement('div');
-  bubble.className = 'msg-bubble';
-  bubble.innerHTML = content.replace(/\n/g, '<br>');
-  
-  const time = document.createElement('div');
-  time.className = 'msg-time';
-  const now = new Date();
-  time.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-  
-  messageDiv.appendChild(avatar);
-  messageDiv.appendChild(bubble);
-  messageDiv.appendChild(time);
-  
-  messagesContainer.appendChild(messageDiv);
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+function clearAIImage() {
+  aiImageData = '';
+  aiImageName = '';
+  const input = document.getElementById('aiImageInput');
+  const attachment = document.getElementById('aiImageAttachment');
+  const preview = document.getElementById('aiImagePreview');
+  if (input) input.value = '';
+  if (attachment) attachment.hidden = true;
+  if (preview) preview.removeAttribute('src');
 }
 
-async function loadChatHistory(conversationId = null) {
-  const messagesContainer = document.getElementById('chatMessages');
-  messagesContainer.innerHTML = '';
-  
-  if (!conversationId) {
-    messagesContainer.innerHTML = `
-      <div class="chat-welcome">
-        <div class="welcome-icon">✨</div>
-        <h3>你好！我是星漫 AI 助手</h3>
-        <p>我可以帮你发现喜欢的画作和画师，有什么想聊的吗？</p>
-        <div class="welcome-suggestions">
-          <button type="button" onclick="sendChatMessage('帮我推荐一些二次元风格的画作')">推荐二次元风格画作</button>
-          <button type="button" onclick="sendChatMessage('有哪些擅长画古风的画师？')">找古风画师</button>
-          <button type="button" onclick="sendChatMessage('我想要定制一幅头像')">定制头像</button>
-        </div>
-      </div>
-    `;
+function selectAIImage(file) {
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    alert('请选择 JPG、PNG 或 WebP 图片。');
     return;
   }
-  
-  try {
-    const response = await apiRequest(`/recommend/chat/history/?conversation_id=${conversationId}`);
-    currentChatConversationId = conversationId;
-    
-    if (response.messages && response.messages.length > 0) {
-      response.messages.forEach(msg => {
-        appendChatMessage(msg.role, msg.content);
-      });
-    } else {
-      messagesContainer.innerHTML = `
-        <div class="chat-welcome">
-          <div class="welcome-icon">✨</div>
-          <h3>开始新的对话</h3>
-          <p>有什么我可以帮你的吗？</p>
-        </div>
-      `;
+  if (file.size > 3 * 1024 * 1024) {
+    alert('图片不能超过 3MB。');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    aiImageData = String(reader.result || '');
+    aiImageName = file.name;
+    document.getElementById('aiImagePreview').src = aiImageData;
+    document.getElementById('aiImageName').textContent = aiImageName;
+    document.getElementById('aiImageAttachment').hidden = false;
+    document.getElementById('aiInput')?.focus();
+  };
+  reader.readAsDataURL(file);
+}
+
+async function openAIReference(type, id, username = '') {
+  if (type === 'artist') {
+    await openUserProfile(username || id);
+    return;
+  }
+  if (type === 'artwork') {
+    const existing = getGalleryCard(String(id));
+    if (existing) return openArtworkDetail(existing);
+    try {
+      const item = artworkToCardData(await apiRequest(`/artworks/${encodeURIComponent(id)}/`, { auth: false }));
+      const index = publicProfileArtworks.findIndex(entry => String(entry.id) === String(item.id));
+      if (index >= 0) publicProfileArtworks[index] = item;
+      else publicProfileArtworks.push(item);
+      openPublicProfileArtwork(item.id);
+    } catch (error) {
+      alert(error.message || '暂时无法打开该作品。');
     }
-  } catch (error) {
-    console.error('Load history error:', error);
-    messagesContainer.innerHTML = '<div class="empty-state">加载对话历史失败</div>';
+    return;
   }
-}
-
-async function newChatConversation() {
-  try {
-    const response = await apiRequest('/recommend/chat/new/', { method: 'POST', body: JSON.stringify({}) });
-    currentChatConversationId = response.conversation_id;
-    await loadChatHistory(currentChatConversationId);
-    await loadChatConversations();
-  } catch (error) {
-    console.error('New conversation error:', error);
-    alert('创建新对话失败');
-  }
-}
-
-async function clearChatHistory() {
-  if (!currentChatConversationId) return;
-  if (!confirm('确定要清空当前对话记录吗？')) return;
-  
-  try {
-    await apiRequest(`/recommend/chat/clear/?conversation_id=${currentChatConversationId}`, { method: 'POST' });
-    await loadChatHistory(currentChatConversationId);
-  } catch (error) {
-    console.error('Clear history error:', error);
-    alert('清空记录失败');
-  }
-}
-
-async function loadChatConversations() {
-  const listContainer = document.getElementById('chatConversationList');
-  
-  try {
-    const response = await apiRequest('/recommend/chat/conversations/');
-    
-    if (response.conversations && response.conversations.length > 0) {
-      listContainer.innerHTML = response.conversations.map(conv => `
-        <div class="chat-conversation-item ${conv.id === currentChatConversationId ? 'active' : ''}" 
-             onclick="loadChatHistory('${conv.id}')">
-          <div class="conv-title">${conv.title || '新对话'}</div>
-          <div class="conv-preview">${conv.last_message || '暂无消息'}</div>
-          <div class="conv-time">${formatTime(conv.updated_at)}</div>
-        </div>
-      `).join('');
-    } else {
-      listContainer.innerHTML = '<div class="empty-state">暂无对话</div>';
+  if (type === 'commission') {
+    if (!currentUser) return openAuth('login', '请先登录后查看委托详情。');
+    let item = getCommissions().find(entry => String(entry.id) === String(id));
+    if (!item) {
+      try {
+        item = commissionFromApi(await apiRequest(`/custom/${encodeURIComponent(id)}/`));
+        commissionCache.unshift(item);
+      } catch (error) {
+        return alert(error.message || '暂时无法打开该委托。');
+      }
     }
-  } catch (error) {
-    console.error('Load conversations error:', error);
-    listContainer.innerHTML = '<div class="empty-state">加载对话列表失败</div>';
+    await openCommissionDetail(item.id);
   }
 }
 
-function formatTime(timestamp) {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diff = now - date;
-  
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
-  return `${date.getMonth() + 1}/${date.getDate()}`;
+function openAIAssistant() {
+  switchPage('ai');
+  ensureAIChatState();
+  document.getElementById('aiInput')?.focus();
 }
 
-document.getElementById('chatInput')?.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendChatMessage();
+async function sendAIMessage(text) {
+  const message = String(text || '').trim() || (aiImageData ? '请详细鉴赏这幅作品，并介绍它可能关联的画风、技法与艺术史知识。' : '');
+  if (!message || aiBusy) return;
+  if (!currentUser) {
+    openAIAssistant();
+    addAIMessage('assistant', '请先登录账号，再使用 AI 创作助手。');
+    return;
+  }
+  ensureAIChatState();
+  const chat = getActiveAIChat();
+  if (!chat) return;
+  const priorHistory = aiHistory.slice(-12);
+  const imageData = aiImageData;
+  const imageName = aiImageName;
+  aiBusy = true;
+  const input = document.getElementById('aiInput');
+  const send = document.getElementById('aiSendBtn');
+  if (input) input.value = '';
+  if (send) send.disabled = true;
+  addAIMessage('user', message);
+  if (imageData) addAIImageMarker(imageName, imageData);
+  chat.messages.push({ role: 'user', content: message, hasImage: !!imageData, imageName });
+  if (chat.title === '新对话') chat.title = message.replace(/\s+/g, ' ').slice(0, 24) || '新对话';
+  chat.updatedAt = Date.now();
+  saveAIChats();
+  renderAIConversationList();
+  document.getElementById('aiChatTitle').textContent = chat.title;
+  clearAIImage();
+  const loading = addAIMessage('assistant', imageData ? '正在观察画面并检索相关艺术资料…' : '正在整理灵感…', 'loading');
+  try {
+    const config = getAIConfig();
+    const data = await apiRequest('/ai/chat/', {
+      method: 'POST', auth: true,
+      body: JSON.stringify({ message, history: priorHistory, image_data: imageData, ...config })
+    });
+    const answer = String(data?.message || '暂时没有生成内容，请再试一次。');
+    if (loading) loading.textContent = answer;
+    loading?.classList.remove('loading');
+    addAIRecommendations(data?.recommendations);
+    addAISources(data?.sources || [], data?.web_search_used);
+    chat.messages.push({
+      role: 'assistant', content: answer,
+      recommendations: data?.recommendations || [],
+      sources: data?.sources || [],
+      webSearchUsed: !!data?.web_search_used
+    });
+    chat.updatedAt = Date.now();
+    aiHistory = chat.messages.map(({ role, content }) => ({ role, content })).slice(-12);
+    saveAIChats();
+    aiChats.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    renderAIConversationList();
+  } catch (error) {
+    const errorMessage = error.message || 'AI 服务暂时不可用，请检查配置后重试。';
+    if (loading) loading.textContent = errorMessage;
+    loading?.classList.remove('loading');
+    chat.messages.push({ role: 'assistant', content: errorMessage });
+    chat.updatedAt = Date.now();
+    aiHistory = chat.messages.map(({ role, content }) => ({ role, content })).slice(-12);
+    saveAIChats();
+  } finally {
+    aiBusy = false;
+    if (send) send.disabled = false;
+    input?.focus();
+  }
+}
+
+document.getElementById('aiSettingsBtn')?.addEventListener('click', () => {
+  const settings = document.getElementById('aiSettings');
+  const config = getAIConfig();
+  document.getElementById('aiApiBase').value = config.api_base || '';
+  document.getElementById('aiModel').value = config.model || '';
+  document.getElementById('aiVisionModel').value = config.vision_model || '';
+  document.getElementById('aiApiKey').value = config.api_key || '';
+  settings.hidden = !settings.hidden;
+});
+document.getElementById('aiSaveConfig')?.addEventListener('click', () => {
+  const config = {
+    api_base: document.getElementById('aiApiBase').value.trim(),
+    model: document.getElementById('aiModel').value.trim(),
+    vision_model: document.getElementById('aiVisionModel').value.trim(),
+    api_key: document.getElementById('aiApiKey').value.trim()
+  };
+  Object.keys(config).forEach(key => { if (!config[key]) delete config[key]; });
+  localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(config));
+  document.getElementById('aiSettings').hidden = true;
+  addAIMessage('assistant', 'API 配置已保存在当前浏览器。');
+});
+document.getElementById('aiResetConfig')?.addEventListener('click', () => {
+  localStorage.removeItem(AI_CONFIG_KEY);
+  ['aiApiBase', 'aiModel', 'aiVisionModel', 'aiApiKey'].forEach(id => { document.getElementById(id).value = ''; });
+  addAIMessage('assistant', '已切换为平台默认 API 配置。');
+});
+document.getElementById('aiComposer')?.addEventListener('submit', event => {
+  event.preventDefault();
+  sendAIMessage(document.getElementById('aiInput')?.value);
+});
+document.getElementById('aiInput')?.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   }
 });
+document.getElementById('aiMessages')?.addEventListener('click', event => {
+  const card = event.target.closest('[data-ai-reference-type]');
+  if (card) openAIReference(card.dataset.aiReferenceType, card.dataset.aiReferenceId, card.dataset.aiReferenceUsername);
+});
+document.getElementById('aiImageButton')?.addEventListener('click', () => document.getElementById('aiImageInput')?.click());
+document.getElementById('aiImageInput')?.addEventListener('change', event => selectAIImage(event.target.files?.[0]));
+document.getElementById('aiRemoveImageBtn')?.addEventListener('click', clearAIImage);
+document.getElementById('aiNewChatBtn')?.addEventListener('click', startNewAIChat);
+document.getElementById('aiConversationList')?.addEventListener('click', event => {
+  const deleteButton = event.target.closest('[data-ai-chat-delete]');
+  if (deleteButton) return deleteAIChat(deleteButton.dataset.aiChatDelete);
+  const chatButton = event.target.closest('[data-ai-chat-id]');
+  if (chatButton) selectAIChat(chatButton.dataset.aiChatId);
+});
+
+const aiAwareSwitchPage = switchPage;
+switchPage = function(pageId) {
+  const result = aiAwareSwitchPage(pageId);
+  document.body.classList.toggle('ai-page-open', pageId === 'ai');
+  if (pageId === 'ai') ensureAIChatState();
+  return result;
+};

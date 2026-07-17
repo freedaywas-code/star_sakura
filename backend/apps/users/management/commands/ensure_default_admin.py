@@ -1,6 +1,4 @@
 import os
-import secrets
-import string
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
@@ -38,8 +36,11 @@ class Command(BaseCommand):
         admin.is_superuser = True
         admin.profile = {**DEFAULT_ADMIN_PROFILE, **(admin.profile or {})}
         admin.bio = admin.bio or DEFAULT_ADMIN_PROFILE["intro"]
-        password = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123456")
-        admin.set_password(password)
+        password = os.getenv("DEFAULT_ADMIN_PASSWORD")
+        if created:
+            admin.set_password(password or User.objects.make_random_password(length=16))
+        elif password:
+            admin.set_password(password)
         admin.save()
 
         action = "created" if created else "updated"

@@ -21,7 +21,7 @@ def api_home(request):
                     "custom": "/api/custom/",
                     "reviews": "/api/reviews/",
                     "inspirations": "/api/inspirations/",
-                    "recommend": "/api/recommend/",
+                    "ai": "/api/ai/chat/",
                 },
             },
         },
@@ -49,7 +49,7 @@ urlpatterns = [
     path("api/custom/", include("apps.custom.urls")),
     path("api/reviews/", include("apps.reviews.urls")),
     path("api/inspirations/", include("apps.inspirations.urls")),
-    path("api/recommend/", include("apps.recommendations.urls")),
+    path("api/ai/", include("apps.ai_assistant.urls")),
 ]
 
 if settings.DEBUG:

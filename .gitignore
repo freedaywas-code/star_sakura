@@ -9,6 +9,10 @@ venv/
 env/
 .idea/
 .vscode/
+.vs/
+*-group_code/
+.vs/
+*-group_code/
 node_modules/
 dist/
 build/
