@@ -225,6 +225,7 @@
       <li><a href="#gallery" data-page="gallery">作品</a></li>
       <li><a href="#contact" data-page="contact">委托</a></li>
       <li><a href="#blog" data-page="blog">灵感</a></li>
+      <li><a href="#aiAssistant" data-page="aiAssistant">AI 助手</a></li>
       <li><a href="#me" data-page="me">我</a></li>
     </ul>
     <div class="nav-account">
@@ -587,6 +588,62 @@
               <button type="button" class="toolbar-btn secondary" id="logoutBtn">退出登录</button>
             </div>
             <div id="settingsProfileSlot"></div>
+            <section class="ai-provider-settings" id="aiProviderSettings" tabindex="-1" aria-labelledby="aiProviderSettingsTitle" aria-busy="false">
+              <div class="ai-provider-heading">
+                <div>
+                  <span class="ai-provider-kicker">智能体模型</span>
+                  <h4 id="aiProviderSettingsTitle">选择 AI 助手使用的模型</h4>
+                  <p>无论选择平台官方模型还是兼容接口，AI 助手都会继续结合站内作品完成聊天和推荐。</p>
+                </div>
+                <span class="ai-provider-current" id="aiProviderCurrent">正在读取配置…</span>
+              </div>
+
+              <fieldset class="ai-provider-options" id="aiProviderOptions">
+                <legend class="sr-only">AI 模型来源</legend>
+                <label class="ai-provider-option" id="aiOfficialOption">
+                  <input type="radio" name="aiProviderMode" value="official" id="aiProviderOfficial">
+                  <span class="ai-provider-option-copy">
+                    <strong>官方模型</strong>
+                    <small>默认使用平台配置的智谱 GLM 接口，用户无需填写 API 密钥。</small>
+                    <em id="aiOfficialModel">正在检查平台模型…</em>
+                  </span>
+                  <span class="ai-provider-check" aria-hidden="true">✓</span>
+                </label>
+                <label class="ai-provider-option" id="aiCustomOption">
+                  <input type="radio" name="aiProviderMode" value="custom" id="aiProviderCustom">
+                  <span class="ai-provider-option-copy">
+                    <strong>自定义兼容模型</strong>
+                    <small>接入支持 OpenAI-compatible Chat Completions 的模型服务。</small>
+                    <em id="aiCustomSummary">尚未配置</em>
+                  </span>
+                  <span class="ai-provider-check" aria-hidden="true">✓</span>
+                </label>
+              </fieldset>
+
+              <div class="ai-provider-custom-fields" id="aiProviderCustomFields" hidden>
+                <div class="form-group">
+                  <label for="aiCustomApiBase">API Base</label>
+                  <input id="aiCustomApiBase" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://example.com/v1">
+                  <small>填写兼容接口的基础地址，系统会在服务器端安全调用。</small>
+                </div>
+                <div class="form-group">
+                  <label for="aiCustomModel">模型名称</label>
+                  <input id="aiCustomModel" type="text" autocomplete="off" spellcheck="false" maxlength="200" placeholder="例如 glm-4-flash、gpt-4.1-mini">
+                </div>
+                <div class="form-group">
+                  <label for="aiCustomApiKey">API Key</label>
+                  <input id="aiCustomApiKey" type="password" autocomplete="new-password" spellcheck="false" maxlength="4096" placeholder="输入新的 API Key">
+                  <small id="aiCustomKeyHint">密钥不会回填；服务地址不变时留空可保留，更换服务商时必须重新输入。</small>
+                </div>
+              </div>
+
+              <div class="ai-provider-actions">
+                <button type="button" class="submit-btn" id="saveAiProviderBtn">保存模型设置</button>
+                <button type="button" class="toolbar-btn secondary" id="testAiProviderBtn">测试连接</button>
+                <button type="button" class="toolbar-btn danger" id="clearAiProviderBtn">清除自定义配置</button>
+              </div>
+              <div class="ai-provider-message" id="aiProviderMessage" role="status" aria-live="polite"></div>
+            </section>
             <div class="settings-grid">
             <div>
               <h4>通过旧密码修改</h4>
@@ -629,6 +686,51 @@
           </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section class="section ai-assistant-page page-section" id="aiAssistant">
+    <div class="section-title fade-in visible">
+      <span class="ai-page-kicker">Star Manga Copilot</span>
+      <h2>星漫 AI 助手</h2>
+      <p>同一个助手会根据你的问题自然聊天，或结合站内真实数据推荐作品、画师并解答委托问题。</p>
+    </div>
+    <div class="ai-assistant-shell fade-in visible" id="aiAssistantShell">
+      <aside class="ai-session-pane" aria-label="AI 对话列表">
+        <header class="ai-session-head">
+          <div>
+            <span>Conversations</span>
+            <h3>最近对话</h3>
+          </div>
+          <button class="ai-icon-button" type="button" id="aiNewConversationBtn" aria-label="新建 AI 对话">＋</button>
+        </header>
+        <div class="ai-conversation-list" id="aiConversationList">
+          <div class="ai-empty-state">登录后可查看对话记录</div>
+        </div>
+      </aside>
+
+      <section class="ai-dialogue-pane" aria-label="AI 助手对话">
+        <header class="ai-dialogue-head">
+          <button class="ai-icon-button ai-dialogue-back" type="button" id="aiConversationBackBtn" aria-label="返回 AI 对话列表">←</button>
+          <span class="ai-bot-avatar" aria-hidden="true">AI</span>
+          <div class="ai-dialogue-title">
+            <h3>星漫 AI 助手</h3>
+            <button type="button" class="ai-mode-status" id="aiModeStatus" data-mode="checking" aria-controls="aiProviderSettings" disabled aria-label="正在检查助手模式"><i aria-hidden="true"></i> 正在检查助手模式…</button>
+          </div>
+          <button class="ai-clear-button" type="button" id="aiClearConversationBtn" disabled>清空当前对话</button>
+        </header>
+
+        <div class="ai-message-list" id="aiMessageList" aria-live="polite" aria-busy="false"></div>
+
+        <form class="ai-composer" id="aiComposer">
+          <label class="sr-only" for="aiMessageInput">向 AI 助手发送消息</label>
+          <textarea id="aiMessageInput" maxlength="2000" rows="2" placeholder="想聊什么都可以；需要推荐时直接告诉我作品、画师或预算条件……"></textarea>
+          <div class="ai-composer-foot">
+            <span id="aiComposerHint">Enter 发送，Shift + Enter 换行</span>
+            <button class="submit-btn" type="submit" id="aiSendButton">发送</button>
+          </div>
+        </form>
+      </section>
     </div>
   </section>
 
@@ -720,6 +822,9 @@
     </div>
   </section>
 
+  <button class="ai-float-button" type="button" id="aiFloatButton" aria-label="打开 AI 助手">
+    <span aria-hidden="true">AI</span>
+  </button>
 
   <footer>
     <div class="footer-content">

@@ -25,6 +25,27 @@ def env_int(name, default=0):
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
+
+def load_local_env(path):
+    """Load backend/.env for direct manage.py/IDE runs; real environment wins."""
+    try:
+        if not path.is_file() or path.stat().st_size > 64 * 1024:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key and key.replace("_", "").isalnum():
+            os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+
+
+load_local_env(BASE_DIR / ".env")
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-only-star-sakura-secret-key")
 DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", [])
@@ -46,6 +67,7 @@ INSTALLED_APPS = [
     "apps.custom",
     "apps.reviews",
     "apps.inspirations",
+    "apps.recommendations",
 ]
 
 MIDDLEWARE = [
@@ -162,6 +184,9 @@ REST_FRAMEWORK = {
         "user": os.getenv("DRF_USER_THROTTLE_RATE", "1200/min"),
         "login": os.getenv("DRF_LOGIN_THROTTLE_RATE", "10/min"),
         "write": os.getenv("DRF_WRITE_THROTTLE_RATE", "120/min"),
+        "ai_chat": os.getenv("DRF_AI_CHAT_THROTTLE_RATE", "20/min"),
+        "ai_settings": os.getenv("DRF_AI_SETTINGS_THROTTLE_RATE", "30/min"),
+        "ai_settings_test": os.getenv("DRF_AI_SETTINGS_TEST_THROTTLE_RATE", "5/min"),
     },
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
 }
@@ -192,3 +217,16 @@ CSRF_COOKIE_HTTPONLY = env_bool("CSRF_COOKIE_HTTPONLY", False)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
+
+# OpenAI-compatible AI service. Credentials are read from the environment only.
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_API_BASE = os.getenv("AI_API_BASE", "https://open.bigmodel.cn/api/paas/v4").strip()
+AI_MODEL = os.getenv("AI_MODEL", "glm-4-flash").strip()
+AI_API_TIMEOUT = env_int("AI_API_TIMEOUT", 60)
+AI_DNS_TIMEOUT = env_int("AI_DNS_TIMEOUT", 5)
+AI_DNS_MAX_CONCURRENCY = env_int("AI_DNS_MAX_CONCURRENCY", 2)
+AI_CUSTOM_MAX_CONCURRENCY = env_int("AI_CUSTOM_MAX_CONCURRENCY", 4)
+AI_OFFICIAL_MAX_CONCURRENCY = env_int("AI_OFFICIAL_MAX_CONCURRENCY", 4)
+AI_MAX_INPUT_LENGTH = env_int("AI_MAX_INPUT_LENGTH", 2000)
+AI_MAX_OUTPUT_LENGTH = env_int("AI_MAX_OUTPUT_LENGTH", 12000)
+AI_CREDENTIAL_ENCRYPTION_KEY = os.getenv("AI_CREDENTIAL_ENCRYPTION_KEY", "").strip()
