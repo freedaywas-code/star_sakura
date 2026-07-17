@@ -82,7 +82,7 @@ async function apiRequest(path, options = {}) {
     headers: apiHeaders(options.headers || {}, !skipAuth && (forceAuth || !isPublicRead || !!token))
   });
   const payload = await response.json().catch(() => ({}));
-  if (response.status === 401 && !skipAuth && !isPublicRead) clearSession();
+  if (response.status === 401 && !skipAuth && !isPublicRead && options.keepSessionOn401 !== true) clearSession();
   if (!response.ok) {
     const detail = payload.message ?? payload.data ?? payload.detail;
     const messages = [];
@@ -4390,7 +4390,8 @@ function setupSettingsPanel() {
 
 setupSettingsPanel();
 
-function openSettingsPanel() {
+function openSettingsPanel(options = {}) {
+  const focusProvider = options?.focusProvider === true;
   document.querySelectorAll('.profile-tab').forEach(item => item.classList.toggle('active', item.dataset.profileTab === 'settings'));
   document.querySelectorAll('.profile-tab-panel').forEach(panel => {
     panel.classList.toggle('active', panel.dataset.profilePanel === 'settings');
@@ -4399,7 +4400,15 @@ function openSettingsPanel() {
   const detail = document.getElementById('settingsDetail');
   if (entry) entry.hidden = true;
   if (detail) detail.hidden = false;
-  document.querySelector('[data-profile-panel="settings"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (currentUser) loadAiProviderSettings({ force: true });
+  const provider = document.getElementById('aiProviderSettings');
+  const scrollTarget = focusProvider
+    ? provider
+    : document.querySelector('[data-profile-panel="settings"]');
+  requestAnimationFrame(() => {
+    scrollTarget?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (focusProvider) provider?.focus({ preventScroll: true });
+  });
 }
 
 document.querySelectorAll('.profile-tab').forEach(tab => {
@@ -5582,3 +5591,1628 @@ window.addEventListener('DOMContentLoaded', async () => {
   const normalizedInitialPage = initialPage === 'about' ? 'me' : initialPage;
   switchPage(document.getElementById(normalizedInitialPage)?.classList.contains('page-section') ? normalizedInitialPage : 'home');
 });
+
+/* ===== AI assistant ===== */
+let aiConversationId = '';
+let aiConversations = [];
+let aiIsStreaming = false;
+let aiStreamController = null;
+let aiSessionUsername = '';
+let aiConversationRequestToken = 0;
+let aiHistoryRequestToken = 0;
+let aiMutationRequestToken = 0;
+let aiStreamRequestToken = 0;
+let aiAssistantMode = 'checking';
+let aiModelConfigured = null;
+let aiProviderSettingsState = null;
+let aiProviderSettingsUsername = '';
+let aiProviderSettingsRequestToken = 0;
+let aiProviderSettingsBusy = false;
+let aiProviderSettingsDirty = false;
+
+function aiDom(id) {
+  return document.getElementById(id);
+}
+
+const AI_MODE_LABELS = {
+  checking: '正在检查助手模式…',
+  ai: '联网 AI 已连接',
+  local: '站内本地助手',
+  fallback: '联网异常，已切换本地助手',
+  error: '回复中断'
+};
+
+function normalizeAiMode(mode) {
+  const value = String(mode || '').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(AI_MODE_LABELS, value) ? value : 'checking';
+}
+
+function setAiModeStatus(mode, model = '') {
+  aiAssistantMode = normalizeAiMode(mode);
+  const status = aiDom('aiModeStatus');
+  if (!status) return;
+  const canOpenSettings = aiAssistantMode === 'local'
+    && aiModelConfigured === false
+    && !!currentUser;
+  const label = aiAssistantMode === 'local' && aiModelConfigured === false
+    ? `站内本地助手（未连接模型）${canOpenSettings ? ' · 去配置' : ''}`
+    : AI_MODE_LABELS[aiAssistantMode];
+  const dot = document.createElement('i');
+  dot.setAttribute('aria-hidden', 'true');
+  status.dataset.mode = aiAssistantMode;
+  status.disabled = !canOpenSettings;
+  status.classList.toggle('is-config-link', canOpenSettings);
+  status.setAttribute(
+    'aria-label',
+    canOpenSettings ? '当前未连接模型，点击前往智能体模型 API 配置' : label
+  );
+  status.replaceChildren(dot, document.createTextNode(` ${label}`));
+  status.title = model && aiAssistantMode === 'ai'
+    ? `当前模型：${String(model)}`
+    : canOpenSettings
+      ? '当前未连接模型，可在“我 → 设置 → 智能体模型”中接入。'
+      : label;
+}
+
+function openAiProviderSettingsFromAssistant() {
+  if (!requireLogin('请先登录后配置 AI 模型。')) return;
+  if (aiAssistantMode !== 'local' || aiModelConfigured !== false) return;
+  switchPage('me');
+  openSettingsPanel({ focusProvider: true });
+}
+
+function applyAiMessageMode(messageElement, mode) {
+  if (!messageElement || messageElement.classList.contains('ai-message--user')) return;
+  const normalized = normalizeAiMode(mode);
+  if (normalized === 'checking') return;
+  messageElement.dataset.aiMode = normalized;
+  messageElement.classList.toggle('ai-message--error', normalized === 'error');
+  const meta = messageElement.querySelector('.ai-message-meta');
+  if (!meta) return;
+  let badge = meta.querySelector('.ai-message-source');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'ai-message-source';
+    meta.prepend(badge);
+  }
+  badge.dataset.mode = normalized;
+  badge.textContent = {
+    ai: '联网 AI',
+    local: '站内本地回答',
+    fallback: '联网失败 · 本地回答',
+    error: '回复中断'
+  }[normalized];
+}
+
+function applyAiAssistantStatus(value = {}) {
+  const source = value && typeof value === 'object' ? value : { mode: value };
+  if (typeof source.configured === 'boolean') aiModelConfigured = source.configured;
+  const mode = source.mode || (source.configured === false ? 'local' : 'checking');
+  setAiModeStatus(mode, source.model || '');
+}
+
+function aiScrollToLatest() {
+  const target = aiDom('aiMessageList');
+  if (target) target.scrollTop = target.scrollHeight;
+}
+
+function formatAiRelativeTime(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  const elapsed = Date.now() - date.getTime();
+  if (elapsed >= 0 && elapsed < 60_000) return '刚刚';
+  if (elapsed >= 0 && elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`;
+  if (elapsed >= 0 && elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`;
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function formatAiMessageTime(timestamp = '') {
+  const date = timestamp ? new Date(timestamp) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function setAiConversationNotice(message) {
+  const target = aiDom('aiConversationList');
+  if (!target) return;
+  const notice = document.createElement('div');
+  notice.className = 'ai-empty-state';
+  notice.textContent = String(message || '暂无对话');
+  target.replaceChildren(notice);
+}
+
+function setAiBusy(busy) {
+  aiIsStreaming = !!busy;
+  const composer = aiDom('aiComposer');
+  const input = aiDom('aiMessageInput');
+  const sendButton = aiDom('aiSendButton');
+  const newButton = aiDom('aiNewConversationBtn');
+  const clearButton = aiDom('aiClearConversationBtn');
+  const messageList = aiDom('aiMessageList');
+  composer?.classList.toggle('is-busy', aiIsStreaming);
+  if (input) input.disabled = aiIsStreaming || !currentUser;
+  if (sendButton) sendButton.disabled = aiIsStreaming || !currentUser;
+  if (newButton) newButton.disabled = aiIsStreaming || !currentUser;
+  if (clearButton) clearButton.disabled = aiIsStreaming || !currentUser || !aiConversationId;
+  if (messageList) messageList.setAttribute('aria-busy', String(aiIsStreaming));
+  const hint = aiDom('aiComposerHint');
+  if (hint) hint.textContent = aiIsStreaming ? 'AI 正在生成回复，请稍候…' : 'Enter 发送，Shift + Enter 换行';
+}
+
+function renderAiWelcome({ title = '你好，我是星漫 AI 助手', message = '想聊什么都可以；当你要找作品、画师或控制预算时，我会自动检索站内真实数据。' } = {}) {
+  const target = aiDom('aiMessageList');
+  if (!target) return;
+
+  const welcome = document.createElement('div');
+  welcome.className = 'ai-welcome';
+  const icon = document.createElement('div');
+  icon.className = 'ai-welcome-icon';
+  icon.textContent = 'AI';
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  const paragraph = document.createElement('p');
+  paragraph.textContent = message;
+  const suggestions = document.createElement('div');
+  suggestions.className = 'ai-suggestions';
+
+  [
+    ['陪我聊聊天', '你好，可以陪我聊聊天吗？'],
+    ['推荐站内热门作品', '请推荐几幅站内作品'],
+    ['寻找原神作品', '帮我找原神相关作品'],
+    ['了解委托竞价', '怎么发布委托、邀请画师并从报价中选择？']
+  ].forEach(([label, prompt]) => {
+    const button = document.createElement('button');
+    button.className = 'ai-suggestion-button';
+    button.type = 'button';
+    button.dataset.aiPrompt = prompt;
+    button.textContent = label;
+    suggestions.appendChild(button);
+  });
+
+  welcome.append(icon, heading, paragraph, suggestions);
+  target.replaceChildren(welcome);
+  setAiBusy(false);
+}
+
+function stripAiArtworkMarkers(content) {
+  return String(content || '')
+    .replace(/\[(?:作品|委托|画师):\d+\]/g, '')
+    .trim();
+}
+
+function appendAiMessage(role, content = '', timestamp = '', { streaming = false, mode = '' } = {}) {
+  const target = aiDom('aiMessageList');
+  if (!target) return null;
+  const safeRole = role === 'user' ? 'user' : 'assistant';
+  const message = document.createElement('article');
+  message.className = `ai-message ai-message--${safeRole}`;
+  message.classList.toggle('ai-message--streaming', !!streaming);
+
+  const avatar = document.createElement('div');
+  avatar.className = 'ai-message-avatar';
+  avatar.setAttribute('aria-hidden', 'true');
+  avatar.textContent = safeRole === 'user' ? '我' : 'AI';
+
+  const contentBox = document.createElement('div');
+  contentBox.className = 'ai-message-content';
+  const text = document.createElement('div');
+  text.className = 'ai-message-text';
+  text.textContent = streaming ? String(content || '') : stripAiArtworkMarkers(content);
+  const time = document.createElement('time');
+  if (timestamp) time.dateTime = timestamp;
+  time.textContent = formatAiMessageTime(timestamp);
+  const meta = document.createElement('div');
+  meta.className = 'ai-message-meta';
+  meta.appendChild(time);
+  contentBox.append(text, meta);
+  message.append(avatar, contentBox);
+  target.appendChild(message);
+  if (safeRole === 'assistant' && mode) applyAiMessageMode(message, mode);
+  aiScrollToLatest();
+  return message;
+}
+
+function normalizeAiImageUrl(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+  if (/^data:image\/(?:png|jpe?g|gif|webp|avif);base64,/i.test(source)) return source;
+  if (/^blob:/i.test(source)) return source;
+  try {
+    const parsed = new URL(source, location.origin);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
+  } catch (error) {
+    return '';
+  }
+  return '';
+}
+
+function normalizeAiArtwork(item = {}) {
+  const id = String(item.id ?? item.artwork_id ?? '').trim();
+  if (!id) return null;
+  return {
+    id,
+    title: String(item.title || item.name || `作品 ${id}`),
+    category: String(item.category || item.tag || '原创作品'),
+    imageUrl: normalizeAiImageUrl(item.image_url || item.image || item.imageSrc || ''),
+    price: item.price == null || item.price === '' ? '' : String(item.price)
+  };
+}
+
+function renderAiArtworkCards(messageElement, artworks = []) {
+  if (!messageElement?.isConnected || !Array.isArray(artworks)) return;
+  const contentBox = messageElement.querySelector('.ai-message-content');
+  if (!contentBox) return;
+  contentBox.querySelector('[data-ai-result-kind="artworks"]')?.remove();
+
+  const seen = new Set();
+  const safeItems = artworks.map(normalizeAiArtwork).filter(item => {
+    if (!item || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  }).slice(0, 8);
+  if (!safeItems.length) return;
+
+  const grid = document.createElement('div');
+  grid.className = 'ai-artwork-grid';
+  grid.dataset.aiResultKind = 'artworks';
+  grid.setAttribute('aria-label', 'AI 推荐的站内作品');
+  safeItems.forEach(item => {
+    const card = document.createElement('button');
+    card.className = 'ai-artwork-card';
+    card.type = 'button';
+    card.dataset.aiArtworkId = item.id;
+
+    const media = document.createElement('span');
+    media.className = 'ai-artwork-media';
+    if (item.imageUrl) {
+      const image = document.createElement('img');
+      image.src = item.imageUrl;
+      image.alt = item.title;
+      image.loading = 'lazy';
+      image.addEventListener('error', () => {
+        image.remove();
+        media.textContent = '作品';
+      }, { once: true });
+      media.appendChild(image);
+    } else {
+      media.textContent = '作品';
+    }
+
+    const info = document.createElement('span');
+    info.className = 'ai-artwork-info';
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const category = document.createElement('span');
+    category.textContent = item.category;
+    info.append(title, category);
+    if (item.price) {
+      const price = document.createElement('em');
+      price.textContent = `¥${item.price}`;
+      info.appendChild(price);
+    }
+    card.append(media, info);
+    grid.appendChild(card);
+  });
+  contentBox.appendChild(grid);
+  aiScrollToLatest();
+}
+
+function normalizeAiTextList(value) {
+  const items = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[,，、|/]/);
+  return [...new Set(items.map(item => String(item || '').trim()).filter(Boolean))];
+}
+
+function normalizeAiCommission(item = {}) {
+  const id = String(item.id ?? item.commission_id ?? '').trim();
+  if (!id) return null;
+  return {
+    id,
+    title: String(item.title || `委托 ${id}`),
+    typeLabel: String(item.type_label || item.typeLabel || '公开委托'),
+    description: String(item.description || ''),
+    budget: item.budget == null || item.budget === '' ? '' : String(item.budget),
+    budgetNote: String(item.budget_note || item.budgetNote || ''),
+    status: String(item.status || 'submitted'),
+    bidCount: Math.max(0, Number(item.bid_count ?? item.bidCount ?? 0) || 0),
+    myBidStatus: String(item.my_bid_status || item.myBidStatus || ''),
+    myInvitationStatus: String(item.my_invitation_status || item.myInvitationStatus || ''),
+    createdAt: String(item.created_at || item.createdAt || ''),
+    matchScore: Number(item.match_score ?? item.matchScore ?? 0) || 0
+  };
+}
+
+function aiCommissionStatusLabel(value) {
+  return {
+    submitted: '竞价中',
+    open: '竞价中',
+    accepted: '已选画师',
+    in_progress: '创作中',
+    completed: '已完成',
+    cancelled: '已取消',
+    closed: '已关闭'
+  }[String(value || '').toLowerCase()] || String(value || '待处理');
+}
+
+function aiRelationshipStatusLabel(kind, value) {
+  const label = {
+    active: '竞价中',
+    pending: '待处理',
+    accepted: '已接受',
+    declined: '已拒绝',
+    rejected: '已拒绝',
+    cancelled: '已取消',
+    withdrawn: '已撤回',
+    selected: '已中选'
+  }[String(value || '').toLowerCase()] || String(value || '');
+  if (!label) return '';
+  return `${kind === 'invite' ? '邀请' : '我的报价'}：${label}`;
+}
+
+function renderAiCommissionCards(messageElement, commissions = []) {
+  if (!messageElement?.isConnected || !Array.isArray(commissions)) return;
+  const contentBox = messageElement.querySelector('.ai-message-content');
+  if (!contentBox) return;
+  contentBox.querySelector('[data-ai-result-kind="commissions"]')?.remove();
+
+  const seen = new Set();
+  const safeItems = commissions.map(normalizeAiCommission).filter(item => {
+    if (!item || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  }).slice(0, 8);
+  if (!safeItems.length) return;
+
+  const grid = document.createElement('div');
+  grid.className = 'ai-artwork-grid ai-commission-grid';
+  grid.dataset.aiResultKind = 'commissions';
+  grid.setAttribute('aria-label', 'AI 匹配的公开委托');
+  safeItems.forEach(item => {
+    const card = document.createElement('button');
+    card.className = 'ai-artwork-card ai-commission-card';
+    card.type = 'button';
+    card.dataset.aiCommissionId = item.id;
+    card.title = item.description || item.title;
+
+    const media = document.createElement('span');
+    media.className = 'ai-artwork-media';
+    media.textContent = item.typeLabel.slice(0, 12);
+
+    const info = document.createElement('span');
+    info.className = 'ai-artwork-info';
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const summary = document.createElement('span');
+    const budget = item.budget
+      ? (/^[¥￥]/.test(item.budget) ? item.budget : `¥${item.budget}`)
+      : item.budgetNote || '预算可商议';
+    summary.textContent = `${budget} · ${aiCommissionStatusLabel(item.status)}`;
+    const activity = document.createElement('span');
+    const relationship = [
+      aiRelationshipStatusLabel('bid', item.myBidStatus),
+      aiRelationshipStatusLabel('invite', item.myInvitationStatus)
+    ].filter(Boolean);
+    activity.textContent = relationship.length
+      ? relationship.join(' · ')
+      : `${item.bidCount} 人报价`;
+    info.append(title, summary, activity);
+    card.append(media, info);
+    grid.appendChild(card);
+  });
+  contentBox.appendChild(grid);
+  aiScrollToLatest();
+}
+
+function normalizeAiArtist(item = {}) {
+  const id = String(item.id ?? item.artist_id ?? '').trim();
+  const username = String(item.username || item.artist_username || '').replace(/^@/, '').trim();
+  if (!id || !username) return null;
+  return {
+    id,
+    username,
+    displayName: String(item.display_name || item.displayName || username),
+    bio: String(item.bio || ''),
+    skills: normalizeAiTextList(item.skills),
+    categories: normalizeAiTextList(item.categories),
+    tags: normalizeAiTextList(item.tags),
+    availableWorkCount: Math.max(0, Number(item.available_work_count ?? item.availableWorkCount ?? 0) || 0),
+    reviewsCount: Math.max(0, Number(item.reviews_count ?? item.reviewsCount ?? 0) || 0),
+    matchScore: Number(item.match_score ?? item.matchScore ?? 0) || 0
+  };
+}
+
+function renderAiArtistCards(messageElement, artists = []) {
+  if (!messageElement?.isConnected || !Array.isArray(artists)) return;
+  const contentBox = messageElement.querySelector('.ai-message-content');
+  if (!contentBox) return;
+  contentBox.querySelector('[data-ai-result-kind="artists"]')?.remove();
+
+  const seen = new Set();
+  const safeItems = artists.map(normalizeAiArtist).filter(item => {
+    if (!item || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  }).slice(0, 8);
+  if (!safeItems.length) return;
+
+  const grid = document.createElement('div');
+  grid.className = 'ai-artwork-grid ai-artist-grid';
+  grid.dataset.aiResultKind = 'artists';
+  grid.setAttribute('aria-label', 'AI 匹配的画师');
+  safeItems.forEach(item => {
+    const card = document.createElement('button');
+    card.className = 'ai-artwork-card ai-artist-card';
+    card.type = 'button';
+    card.dataset.aiArtistId = item.id;
+    card.dataset.aiArtistUsername = item.username;
+    card.title = item.bio || `打开 @${item.username} 的个人主页`;
+
+    const media = document.createElement('span');
+    media.className = 'ai-artwork-media';
+    media.textContent = String(item.displayName).trim().slice(0, 1).toUpperCase() || '画';
+
+    const info = document.createElement('span');
+    info.className = 'ai-artwork-info';
+    const name = document.createElement('strong');
+    name.textContent = item.displayName;
+    const handle = document.createElement('span');
+    handle.textContent = `@${item.username}`;
+    const specialties = document.createElement('span');
+    const labels = [...item.skills, ...item.categories, ...item.tags].slice(0, 3);
+    specialties.textContent = labels.length ? labels.join(' · ') : '查看公开作品与资料';
+    const stats = document.createElement('span');
+    stats.textContent = `可约作品 ${item.availableWorkCount} · 评价 ${item.reviewsCount}`;
+    info.append(name, handle, specialties, stats);
+    card.append(media, info);
+    grid.appendChild(card);
+  });
+  contentBox.appendChild(grid);
+  aiScrollToLatest();
+}
+
+function renderAiResultCards(messageElement, { artworks = [], commissions = [], artists = [] } = {}) {
+  if (!messageElement?.isConnected) return;
+  const contentBox = messageElement.querySelector('.ai-message-content');
+  contentBox?.querySelectorAll('[data-ai-result-kind]').forEach(grid => grid.remove());
+  renderAiArtworkCards(messageElement, artworks);
+  renderAiCommissionCards(messageElement, commissions);
+  renderAiArtistCards(messageElement, artists);
+}
+
+function normalizeAiConversation(item = {}) {
+  const id = String(item.id ?? item.conversation_id ?? '').trim();
+  if (!id) return null;
+  return {
+    id,
+    title: String(item.title || '新对话'),
+    preview: String(item.last_message || item.preview || '暂无消息'),
+    updatedAt: String(item.updated_at || item.last_time || '')
+  };
+}
+
+function renderAiConversationList() {
+  const target = aiDom('aiConversationList');
+  if (!target) return;
+  const items = [...aiConversations];
+  if (aiConversationId && !items.some(item => item.id === aiConversationId)) {
+    items.unshift({ id: aiConversationId, title: '新对话', preview: '等待发送消息', updatedAt: '' });
+  }
+  if (!items.length) {
+    setAiConversationNotice('暂无对话，点击右上角“＋”开始');
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  items.forEach(item => {
+    const button = document.createElement('button');
+    button.className = 'ai-conversation-item';
+    button.classList.toggle('active', item.id === aiConversationId);
+    button.type = 'button';
+    button.dataset.aiConversationId = item.id;
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const preview = document.createElement('span');
+    preview.textContent = item.preview;
+    const time = document.createElement('time');
+    if (item.updatedAt) time.dateTime = item.updatedAt;
+    time.textContent = formatAiRelativeTime(item.updatedAt);
+    button.append(title, preview, time);
+    fragment.appendChild(button);
+  });
+  target.replaceChildren(fragment);
+}
+
+function extractAiReferenceIds(content, label) {
+  const expression = label === 'commission'
+    ? /\[委托:(\d+)\]/g
+    : label === 'artist'
+      ? /\[画师:(\d+)\]/g
+      : /\[作品:(\d+)\]/g;
+  return [...new Set(Array.from(String(content || '').matchAll(expression), match => match[1]))];
+}
+
+async function loadAiArtworkReferences(messageElement, content, requestToken = null) {
+  const ids = extractAiReferenceIds(content, 'artwork').slice(0, 8);
+  if (!ids.length) return;
+  const username = aiSessionUsername;
+  const results = await Promise.allSettled(ids.map(id => apiRequest(`/artworks/${encodeURIComponent(id)}/`, { auth: false })));
+  if (!messageElement?.isConnected || username !== aiSessionUsername) return;
+  if (requestToken != null && requestToken !== aiHistoryRequestToken) return;
+  const artworks = results.filter(result => result.status === 'fulfilled').map(result => result.value);
+  renderAiArtworkCards(messageElement, artworks);
+}
+
+async function loadAiCommissionReferences(messageElement, content, requestToken = null) {
+  const ids = extractAiReferenceIds(content, 'commission').slice(0, 8);
+  if (!ids.length) return;
+  const username = aiSessionUsername;
+  const results = await Promise.allSettled(ids.map(id => apiRequest(`/custom/${encodeURIComponent(id)}/`, { auth: true })));
+  if (!messageElement?.isConnected || username !== aiSessionUsername) return;
+  if (requestToken != null && requestToken !== aiHistoryRequestToken) return;
+  const commissions = results.filter(result => result.status === 'fulfilled').map(result => result.value);
+  renderAiCommissionCards(messageElement, commissions);
+}
+
+function referencedAiResults(content, source = {}) {
+  const select = (items, label, idKeys) => {
+    if (!Array.isArray(items)) return [];
+    const ids = new Set(extractAiReferenceIds(content, label));
+    if (!ids.size) return [];
+    return items.filter(item => ids.has(String(idKeys.reduce((value, key) => value ?? item?.[key], null) ?? '')));
+  };
+  return {
+    artworks: select(source.artworks, 'artwork', ['id', 'artwork_id']),
+    commissions: select(source.commissions, 'commission', ['id', 'commission_id']),
+    artists: select(source.artists, 'artist', ['id', 'artist_id'])
+  };
+}
+
+async function loadAiHistory(conversationId) {
+  if (!currentUser || aiIsStreaming) return;
+  ensureAiAssistantSession();
+  const id = String(conversationId || '').trim();
+  if (!id) {
+    aiConversationId = '';
+    renderAiConversationList();
+    renderAiWelcome();
+    return;
+  }
+
+  aiConversationId = id;
+  renderAiConversationList();
+  aiDom('aiAssistantShell')?.classList.add('ai-dialogue-open');
+  const target = aiDom('aiMessageList');
+  if (target) {
+    const loading = document.createElement('div');
+    loading.className = 'ai-empty-state';
+    loading.textContent = '正在加载对话…';
+    target.replaceChildren(loading);
+  }
+  setAiBusy(false);
+
+  const requestToken = ++aiHistoryRequestToken;
+  const username = aiSessionUsername;
+  const guard = () => requestToken === aiHistoryRequestToken && username === aiSessionUsername;
+  try {
+    const response = await aiApiRequest(`/recommend/chat/history/?conversation_id=${encodeURIComponent(id)}&limit=100`, {}, guard);
+    if (!guard()) return;
+    const messages = Array.isArray(response?.messages) ? response.messages : apiList(response);
+    target?.replaceChildren();
+    if (!messages.length) {
+      renderAiWelcome({ title: '开始新的对话', message: '你可以直接聊天，也可以随时让我根据条件查找站内作品或画师。' });
+      return;
+    }
+    const latestAssistant = [...messages].reverse().find(item => item.role === 'assistant' || item.is_user === false);
+    if (latestAssistant?.response_mode || latestAssistant?.mode) {
+      setAiModeStatus(latestAssistant.response_mode || latestAssistant.mode);
+    }
+    const hydrationTasks = [];
+    messages.forEach(item => {
+      const content = String(item.content ?? item.message ?? '');
+      const message = appendAiMessage(
+        item.role === 'user' || item.is_user === true ? 'user' : 'assistant',
+        content,
+        item.created_at || item.timestamp || '',
+        { mode: item.mode || item.response_mode || '' }
+      );
+      if (message && item.role !== 'user' && item.is_user !== true) {
+        const structured = referencedAiResults(content, item);
+        renderAiResultCards(message, structured);
+        if (!structured.artworks.length) {
+          hydrationTasks.push(loadAiArtworkReferences(message, content, requestToken));
+        }
+        if (!structured.commissions.length) {
+          hydrationTasks.push(loadAiCommissionReferences(message, content, requestToken));
+        }
+      }
+    });
+    Promise.allSettled(hydrationTasks).catch(() => {});
+  } catch (error) {
+    if (!guard()) return;
+    if (error.status === 401) {
+      clearSession();
+      openAuth('login', '登录状态已过期，请重新登录后使用 AI 助手。');
+      return;
+    }
+    if (target) {
+      const notice = document.createElement('div');
+      notice.className = 'ai-empty-state';
+      notice.textContent = error.message || '对话历史加载失败，请稍后重试。';
+      target.replaceChildren(notice);
+    }
+  }
+}
+
+async function loadAiConversations({ autoOpen = false, silent = false } = {}) {
+  if (!currentUser) {
+    setAiConversationNotice('登录后可查看对话记录');
+    return;
+  }
+  ensureAiAssistantSession();
+  const requestToken = ++aiConversationRequestToken;
+  const username = aiSessionUsername;
+  const guard = () => requestToken === aiConversationRequestToken && username === aiSessionUsername;
+  if (!silent) setAiConversationNotice('正在加载对话…');
+  try {
+    const response = await aiApiRequest('/recommend/chat/conversations/', {}, guard);
+    if (!guard()) return;
+    applyAiAssistantStatus(response?.assistant_status || response?.assistant || {});
+    const rawItems = Array.isArray(response?.conversations) ? response.conversations : apiList(response);
+    aiConversations = rawItems.map(normalizeAiConversation).filter(Boolean);
+    renderAiConversationList();
+    if (!autoOpen || aiIsStreaming) return;
+    const nextId = aiConversationId || aiConversations[0]?.id || '';
+    if (nextId) await loadAiHistory(nextId);
+    else {
+      renderAiWelcome();
+      aiDom('aiAssistantShell')?.classList.add('ai-dialogue-open');
+    }
+  } catch (error) {
+    if (!guard()) return;
+    if (error.status === 401) {
+      clearSession();
+      openAuth('login', '登录状态已过期，请重新登录后使用 AI 助手。');
+      return;
+    }
+    if (!silent) setAiConversationNotice(error.message || '对话列表加载失败，请稍后重试。');
+  }
+}
+
+async function openAiArtworkById(artworkId) {
+  const id = String(artworkId || '').trim();
+  if (!id) return;
+  const existing = getGalleryCard(id);
+  if (existing) {
+    openArtworkDetail(existing);
+    return;
+  }
+  try {
+    const raw = await apiRequest(`/artworks/${encodeURIComponent(id)}/`, { auth: false });
+    const item = artworkToCardData(raw);
+    if (!item?.id) throw new Error('作品不存在或已下架。');
+    recordView('artwork', item.id);
+    aiDom('detailTitle').textContent = item.name;
+    aiDom('detailTag').textContent = item.tag;
+    const detailImage = aiDom('detailImage');
+    if (item.imageSrc) detailImage.src = item.imageSrc;
+    else detailImage.removeAttribute('src');
+    aiDom('commentCardId').value = item.id;
+    aiDom('commentText').value = '';
+    const imageInput = aiDom('commentImageInput');
+    if (imageInput) imageInput.value = '';
+    aiDom('commentImageName').textContent = '';
+    commentImageSrc = '';
+    const owner = aiDom('detailOwner');
+    if (owner) {
+      owner.hidden = !item.owner;
+      owner.textContent = item.owner ? `作者 @${item.owner}` : '';
+      if (item.owner) owner.dataset.userProfile = item.owner;
+      else delete owner.dataset.userProfile;
+    }
+    renderArtworkComments(item.id);
+    aiDom('artworkDetail').classList.remove('hidden');
+    startArtworkCommentSync();
+  } catch (error) {
+    alert(error.message || '作品加载失败，请稍后重试。');
+  }
+}
+
+async function openAiCommissionById(commissionId) {
+  const id = String(commissionId || '').trim();
+  if (!id || !requireLogin('请先登录后查看委托详情。')) return;
+  let item = getCommissions().find(entry => String(entry.id) === id)
+    || searchState.results.commissions.find(entry => String(entry.id) === id);
+  if (!item) {
+    try {
+      const raw = await apiRequest(`/custom/${encodeURIComponent(id)}/`, { auth: true });
+      item = commissionFromApi(raw);
+      if (!item?.id) throw new Error('委托不存在或已关闭。');
+      const index = commissionCache.findIndex(entry => String(entry.id) === id);
+      if (index >= 0) commissionCache[index] = item;
+      else commissionCache.unshift(item);
+      renderCommissionBoard();
+    } catch (error) {
+      alert(error.message || '委托详情加载失败，请稍后重试。');
+      return;
+    }
+  }
+  await openCommissionDetail(id);
+}
+
+function aiAbortError() {
+  const error = new Error('AI 请求已取消');
+  error.name = 'AbortError';
+  return error;
+}
+
+function aiErrorMessage(payload, fallback = 'AI 请求失败，请稍后重试。') {
+  const source = payload?.message ?? payload?.detail ?? payload?.data ?? payload;
+  if (typeof source === 'string' && source.trim()) return source.trim();
+  if (Array.isArray(source)) {
+    const text = source.map(item => aiErrorMessage(item, '')).filter(Boolean).join('；');
+    if (text) return text;
+  }
+  if (source && typeof source === 'object') {
+    const text = Object.values(source).map(item => aiErrorMessage(item, '')).filter(Boolean).join('；');
+    if (text) return text;
+  }
+  return fallback;
+}
+
+function isAiSessionCurrent(username, guard = null) {
+  return !!currentUser
+    && !!username
+    && currentUser.username === username
+    && aiSessionUsername === username
+    && (!guard || guard());
+}
+
+async function refreshAiAccessToken(username, guard = null) {
+  if (!isAiSessionCurrent(username, guard)) return '';
+  const storedTokens = JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}');
+  const refresh = currentUser?.refresh || storedTokens.refresh;
+  if (!refresh) return '';
+  try {
+    const response = await fetch(`${API_BASE}/users/token/refresh/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh })
+    });
+    const payload = await response.json().catch(() => ({}));
+    const data = payload?.data ?? payload;
+    if (!response.ok || !data?.access) return '';
+    if (!isAiSessionCurrent(username, guard)) return '';
+    currentUser.access = data.access;
+    if (data.refresh) currentUser.refresh = data.refresh;
+    localStorage.setItem(STORAGE.currentUser, JSON.stringify(currentUser));
+    localStorage.setItem(STORAGE.authTokens, JSON.stringify({
+      access: currentUser.access,
+      refresh: currentUser.refresh || refresh
+    }));
+    return currentUser.access;
+  } catch (error) {
+    return '';
+  }
+}
+
+async function aiApiRequest(path, options = {}, guard = null, retryCount = 0) {
+  const username = aiSessionUsername;
+  if (!isAiSessionCurrent(username, guard)) throw aiAbortError();
+  try {
+    return await apiRequest(path, { ...options, keepSessionOn401: true });
+  } catch (error) {
+    if (error?.status !== 401 || retryCount > 0) throw error;
+    const access = await refreshAiAccessToken(username, guard);
+    if (!isAiSessionCurrent(username, guard)) throw aiAbortError();
+    if (!access) throw error;
+    return aiApiRequest(path, options, guard, retryCount + 1);
+  }
+}
+
+function emptyAiProviderSettings() {
+  return {
+    mode: 'official',
+    official: { available: false, model: '' },
+    custom: { apiBase: '', model: '', hasApiKey: false }
+  };
+}
+
+function aiProviderBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || String(value).toLowerCase() === 'true') return true;
+  if (value === 0 || value === '0' || String(value).toLowerCase() === 'false') return false;
+  return fallback;
+}
+
+function normalizeAiProviderSettings(value = {}, fallback = emptyAiProviderSettings()) {
+  const wrapped = value && typeof value === 'object' ? value : {};
+  const source = wrapped.settings && typeof wrapped.settings === 'object' ? wrapped.settings : wrapped;
+  const official = source.official && typeof source.official === 'object' ? source.official : {};
+  const custom = source.custom && typeof source.custom === 'object' ? source.custom : {};
+  const rawMode = String(source.mode ?? source.provider ?? fallback.mode ?? 'official').toLowerCase();
+  const officialModel = String(official.model ?? source.official_model ?? fallback.official.model ?? '').trim();
+  const customApiBase = String(custom.api_base ?? custom.apiBase ?? source.api_base ?? fallback.custom.apiBase ?? '').trim();
+  const customModel = String(custom.model ?? source.custom_model ?? fallback.custom.model ?? '').trim();
+  return {
+    mode: rawMode === 'custom' ? 'custom' : 'official',
+    official: {
+      available: aiProviderBoolean(
+        official.available ?? source.official_available,
+        fallback.official.available || !!officialModel
+      ),
+      model: officialModel
+    },
+    custom: {
+      apiBase: customApiBase,
+      model: customModel,
+      hasApiKey: aiProviderBoolean(
+        custom.has_api_key ?? custom.hasApiKey ?? source.has_api_key,
+        fallback.custom.hasApiKey
+      )
+    }
+  };
+}
+
+function aiProviderHasCustomConfig(settings = aiProviderSettingsState) {
+  return !!settings && !!(
+    settings.custom.hasApiKey
+    || settings.custom.apiBase
+    || settings.custom.model
+  );
+}
+
+function setAiProviderMessage(message = '', tone = '') {
+  const target = aiDom('aiProviderMessage');
+  if (!target) return;
+  target.textContent = String(message || '');
+  if (tone) target.dataset.tone = tone;
+  else delete target.dataset.tone;
+}
+
+function selectedAiProviderMode() {
+  return aiDom('aiProviderCustom')?.checked ? 'custom' : 'official';
+}
+
+function renderAiProviderModeSelection(mode = selectedAiProviderMode()) {
+  const normalizedMode = mode === 'custom' ? 'custom' : 'official';
+  const officialInput = aiDom('aiProviderOfficial');
+  const customInput = aiDom('aiProviderCustom');
+  if (officialInput) officialInput.checked = normalizedMode === 'official';
+  if (customInput) customInput.checked = normalizedMode === 'custom';
+  aiDom('aiOfficialOption')?.classList.toggle('is-selected', normalizedMode === 'official');
+  aiDom('aiCustomOption')?.classList.toggle('is-selected', normalizedMode === 'custom');
+  const fields = aiDom('aiProviderCustomFields');
+  if (fields) fields.hidden = normalizedMode !== 'custom';
+  ['aiCustomApiBase', 'aiCustomModel', 'aiCustomApiKey'].forEach(id => {
+    const input = aiDom(id);
+    if (input) input.disabled = aiProviderSettingsBusy || normalizedMode !== 'custom';
+  });
+}
+
+function updateAiProviderControls() {
+  const settings = aiProviderSettingsState;
+  const officialInput = aiDom('aiProviderOfficial');
+  const customInput = aiDom('aiProviderCustom');
+  if (officialInput) officialInput.disabled = aiProviderSettingsBusy || !settings?.official.available;
+  if (customInput) customInput.disabled = aiProviderSettingsBusy || !currentUser;
+  aiDom('aiOfficialOption')?.classList.toggle('is-unavailable', !!settings && !settings.official.available);
+  const saveButton = aiDom('saveAiProviderBtn');
+  const testButton = aiDom('testAiProviderBtn');
+  const clearButton = aiDom('clearAiProviderBtn');
+  if (saveButton) saveButton.disabled = aiProviderSettingsBusy || !currentUser || !settings;
+  if (testButton) testButton.disabled = aiProviderSettingsBusy || !currentUser || !settings || aiProviderSettingsDirty;
+  if (clearButton) clearButton.disabled = aiProviderSettingsBusy || !currentUser || !aiProviderHasCustomConfig(settings);
+  renderAiProviderModeSelection(selectedAiProviderMode());
+}
+
+function setAiProviderBusy(busy) {
+  aiProviderSettingsBusy = !!busy;
+  const section = aiDom('aiProviderSettings');
+  if (section) section.setAttribute('aria-busy', String(aiProviderSettingsBusy));
+  updateAiProviderControls();
+}
+
+function renderAiProviderSettings() {
+  const settings = aiProviderSettingsState;
+  if (!settings) {
+    updateAiProviderControls();
+    return;
+  }
+  const officialModel = aiDom('aiOfficialModel');
+  const customSummary = aiDom('aiCustomSummary');
+  const current = aiDom('aiProviderCurrent');
+  const keyHint = aiDom('aiCustomKeyHint');
+  if (officialModel) {
+    officialModel.textContent = settings.official.available
+      ? `平台模型：${settings.official.model || '默认模型'}`
+      : '平台模型暂不可用';
+  }
+  if (customSummary) {
+    customSummary.textContent = aiProviderHasCustomConfig(settings)
+      ? `已配置：${settings.custom.model || '未填写模型名'}`
+      : '尚未配置';
+  }
+  if (current) {
+    current.textContent = settings.mode === 'custom'
+      ? `当前：自定义 · ${settings.custom.model || '兼容模型'}`
+      : settings.official.available
+        ? `当前：官方 · ${settings.official.model || '平台默认模型'}`
+        : '当前：官方（服务器未配置）';
+  }
+  if (keyHint) {
+    keyHint.textContent = settings.custom.hasApiKey
+      ? '密钥已安全保存。输入框不会回填；服务地址不变时留空会保留，更换服务商时必须重新输入。'
+      : '尚未保存密钥。密钥不会回填、缓存或显示在浏览器中。';
+  }
+  const apiBaseInput = aiDom('aiCustomApiBase');
+  const modelInput = aiDom('aiCustomModel');
+  const apiKeyInput = aiDom('aiCustomApiKey');
+  if (apiBaseInput) apiBaseInput.value = settings.custom.apiBase;
+  if (modelInput) modelInput.value = settings.custom.model;
+  if (apiKeyInput) apiKeyInput.value = '';
+  renderAiProviderModeSelection(settings.mode);
+  updateAiProviderControls();
+}
+
+function resetAiProviderSettingsState() {
+  aiProviderSettingsRequestToken += 1;
+  aiProviderSettingsState = null;
+  aiProviderSettingsUsername = '';
+  aiProviderSettingsDirty = false;
+  aiProviderSettingsBusy = false;
+  const section = aiDom('aiProviderSettings');
+  if (section) section.setAttribute('aria-busy', 'false');
+  ['aiCustomApiBase', 'aiCustomModel', 'aiCustomApiKey'].forEach(id => {
+    const input = aiDom(id);
+    if (input) input.value = '';
+  });
+  const officialInput = aiDom('aiProviderOfficial');
+  const customInput = aiDom('aiProviderCustom');
+  if (officialInput) officialInput.checked = false;
+  if (customInput) customInput.checked = false;
+  const current = aiDom('aiProviderCurrent');
+  const officialModel = aiDom('aiOfficialModel');
+  const customSummary = aiDom('aiCustomSummary');
+  if (current) current.textContent = currentUser ? '尚未读取配置' : '登录后可配置';
+  if (officialModel) officialModel.textContent = '正在检查平台模型…';
+  if (customSummary) customSummary.textContent = '尚未配置';
+  const fields = aiDom('aiProviderCustomFields');
+  if (fields) fields.hidden = true;
+  aiDom('aiOfficialOption')?.classList.remove('is-selected', 'is-unavailable');
+  aiDom('aiCustomOption')?.classList.remove('is-selected');
+  setAiProviderMessage('');
+  updateAiProviderControls();
+}
+
+function handleAiProviderUnauthorized() {
+  clearSession();
+  openAuth('login', '登录状态已过期，请重新登录后配置 AI 模型。');
+  refreshAuthUI();
+}
+
+async function loadAiProviderSettings({ force = false } = {}) {
+  if (!currentUser) {
+    resetAiProviderSettingsState();
+    return;
+  }
+  ensureAiAssistantSession();
+  const username = currentUser.username;
+  if (!force && aiProviderSettingsState && aiProviderSettingsUsername === username) {
+    renderAiProviderSettings();
+    return;
+  }
+  aiProviderSettingsUsername = username;
+  const requestToken = ++aiProviderSettingsRequestToken;
+  const guard = () => requestToken === aiProviderSettingsRequestToken
+    && aiProviderSettingsUsername === username
+    && currentUser?.username === username;
+  setAiProviderBusy(true);
+  setAiProviderMessage('正在读取 AI 模型设置…', 'loading');
+  try {
+    const response = await aiApiRequest('/recommend/settings/', {}, guard);
+    if (!guard()) return;
+    aiProviderSettingsState = normalizeAiProviderSettings(response);
+    aiProviderSettingsDirty = false;
+    renderAiProviderSettings();
+    setAiProviderMessage(
+      aiProviderSettingsState.mode === 'official' && !aiProviderSettingsState.official.available
+        ? '平台官方模型尚未配置；可选择自定义兼容模型，填写接口后保存并测试连接。'
+        : '模型设置已载入。',
+      aiProviderSettingsState.mode === 'official' && !aiProviderSettingsState.official.available ? 'error' : ''
+    );
+  } catch (error) {
+    if (!guard() || error?.name === 'AbortError') return;
+    if (error?.status === 401) {
+      handleAiProviderUnauthorized();
+      return;
+    }
+    aiProviderSettingsState = null;
+    setAiProviderMessage('模型设置加载失败，请确认服务已启动后重试。', 'error');
+  } finally {
+    if (guard()) setAiProviderBusy(false);
+  }
+}
+
+function markAiProviderSettingsDirty() {
+  if (!aiProviderSettingsState || aiProviderSettingsBusy) return;
+  aiProviderSettingsDirty = true;
+  renderAiProviderModeSelection(selectedAiProviderMode());
+  updateAiProviderControls();
+  setAiProviderMessage('设置尚未保存；保存后才能测试当前选择。');
+}
+
+function buildAiProviderPayload() {
+  const mode = selectedAiProviderMode();
+  if (mode === 'official') {
+    if (!aiProviderSettingsState?.official.available) throw new Error('平台官方模型当前不可用。');
+    return { mode };
+  }
+  const apiBase = String(aiDom('aiCustomApiBase')?.value || '').trim();
+  const model = String(aiDom('aiCustomModel')?.value || '').trim();
+  const apiKey = String(aiDom('aiCustomApiKey')?.value || '').trim();
+  if (!apiBase) throw new Error('请输入自定义模型的 API Base。');
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(apiBase);
+  } catch (error) {
+    throw new Error('API Base 不是有效地址。');
+  }
+  if (parsedUrl.protocol !== 'https:') throw new Error('API Base 必须使用公网 HTTPS 地址。');
+  if (!model) throw new Error('请输入自定义模型名称。');
+  if (!apiKey && !aiProviderSettingsState?.custom.hasApiKey) throw new Error('首次配置自定义模型时需要填写 API Key。');
+  if (!apiKey && aiProviderSettingsState?.custom.hasApiKey && aiProviderSettingsState.custom.apiBase) {
+    let savedUrl;
+    try {
+      savedUrl = new URL(aiProviderSettingsState.custom.apiBase);
+    } catch (error) {
+      throw new Error('已保存的服务地址无效，请重新输入 API Key。');
+    }
+    const currentOrigin = `${parsedUrl.hostname.toLowerCase().replace(/\.$/, '')}:${parsedUrl.port || '443'}`;
+    const savedOrigin = `${savedUrl.hostname.toLowerCase().replace(/\.$/, '')}:${savedUrl.port || '443'}`;
+    if (currentOrigin !== savedOrigin) throw new Error('更换 API 服务地址时必须重新输入 API Key。');
+  }
+  const payload = { mode, api_base: apiBase, model };
+  if (apiKey) payload.api_key = apiKey;
+  return payload;
+}
+
+function refreshAiAssistantAfterProviderChange() {
+  if (!currentUser) return;
+  resetAiAssistantState();
+  ensureAiAssistantSession();
+  setAiModeStatus('checking');
+  loadAiConversations({ autoOpen: getActivePageId() === 'aiAssistant', silent: true });
+}
+
+async function saveAiProviderSettings() {
+  if (!currentUser || aiProviderSettingsBusy || !aiProviderSettingsState) return;
+  let payload;
+  try {
+    payload = buildAiProviderPayload();
+  } catch (error) {
+    setAiProviderMessage(error.message, 'error');
+    return;
+  }
+  const fallback = normalizeAiProviderSettings({
+    mode: payload.mode,
+    official: aiProviderSettingsState.official,
+    custom: payload.mode === 'custom' ? {
+      api_base: payload.api_base,
+      model: payload.model,
+      has_api_key: !!payload.api_key || aiProviderSettingsState.custom.hasApiKey
+    } : aiProviderSettingsState.custom
+  }, aiProviderSettingsState);
+  const body = JSON.stringify(payload);
+  delete payload.api_key;
+  const keyInput = aiDom('aiCustomApiKey');
+  if (keyInput) keyInput.value = '';
+  const username = currentUser.username;
+  const requestToken = ++aiProviderSettingsRequestToken;
+  const guard = () => requestToken === aiProviderSettingsRequestToken
+    && aiProviderSettingsUsername === username
+    && currentUser?.username === username;
+  setAiProviderBusy(true);
+  setAiProviderMessage('正在保存模型设置…', 'loading');
+  try {
+    const response = await aiApiRequest('/recommend/settings/', {
+      method: 'PUT',
+      body
+    }, guard);
+    if (!guard()) return;
+    aiProviderSettingsState = normalizeAiProviderSettings(response, fallback);
+    aiProviderSettingsDirty = false;
+    renderAiProviderSettings();
+    setAiProviderMessage('模型设置已保存，AI 助手已切换到新的配置。', 'success');
+    refreshAiAssistantAfterProviderChange();
+  } catch (error) {
+    if (!guard() || error?.name === 'AbortError') return;
+    if (error?.status === 401) {
+      handleAiProviderUnauthorized();
+      return;
+    }
+    setAiProviderMessage(
+      error?.status === 400
+        ? `配置未通过校验：${error.message || '请检查接口地址、模型名称和密钥后重试。'}`
+        : '模型设置保存失败，请稍后重试。',
+      'error'
+    );
+  } finally {
+    if (guard()) setAiProviderBusy(false);
+  }
+}
+
+async function testAiProviderConnection() {
+  if (!currentUser || aiProviderSettingsBusy || !aiProviderSettingsState) return;
+  if (aiProviderSettingsDirty) {
+    setAiProviderMessage('请先保存更改，再测试当前模型连接。', 'error');
+    return;
+  }
+  const username = currentUser.username;
+  const requestToken = ++aiProviderSettingsRequestToken;
+  const guard = () => requestToken === aiProviderSettingsRequestToken
+    && aiProviderSettingsUsername === username
+    && currentUser?.username === username;
+  setAiProviderBusy(true);
+  setAiProviderMessage('正在测试已保存的模型连接…', 'loading');
+  try {
+    const response = await aiApiRequest('/recommend/settings/test/', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }, guard);
+    if (!guard()) return;
+    const responseStatus = String(response?.status || '').toLowerCase();
+    const succeeded = response?.success !== false
+      && response?.ok !== false
+      && response?.available !== false
+      && response?.connected !== false
+      && !['error', 'failed', 'unavailable'].includes(responseStatus);
+    if (!succeeded) {
+      setAiProviderMessage('连接测试未通过，请检查模型配置或服务商账户状态。', 'error');
+      return;
+    }
+    const activeModel = aiProviderSettingsState.mode === 'custom'
+      ? aiProviderSettingsState.custom.model
+      : aiProviderSettingsState.official.model;
+    const latencyValue = Number(response?.latency_ms ?? response?.latency);
+    const latency = Number.isFinite(latencyValue) && latencyValue >= 0 ? `，耗时 ${Math.round(latencyValue)} ms` : '';
+    setAiProviderMessage(`连接成功${activeModel ? `：${activeModel}` : ''}${latency}。`, 'success');
+  } catch (error) {
+    if (!guard() || error?.name === 'AbortError') return;
+    if (error?.status === 401) {
+      handleAiProviderUnauthorized();
+      return;
+    }
+    setAiProviderMessage('连接测试失败，请检查接口地址、模型名称、密钥和账户额度。', 'error');
+  } finally {
+    if (guard()) setAiProviderBusy(false);
+  }
+}
+
+async function clearAiProviderSettings() {
+  if (!currentUser || aiProviderSettingsBusy || !aiProviderHasCustomConfig()) return;
+  if (!confirm('确定清除已保存的自定义模型地址、模型名称和 API Key 吗？')) return;
+  const username = currentUser.username;
+  const requestToken = ++aiProviderSettingsRequestToken;
+  const guard = () => requestToken === aiProviderSettingsRequestToken
+    && aiProviderSettingsUsername === username
+    && currentUser?.username === username;
+  const fallback = {
+    mode: 'official',
+    official: { ...aiProviderSettingsState.official },
+    custom: { apiBase: '', model: '', hasApiKey: false }
+  };
+  setAiProviderBusy(true);
+  setAiProviderMessage('正在清除自定义模型配置…', 'loading');
+  try {
+    const response = await aiApiRequest('/recommend/settings/', { method: 'DELETE' }, guard);
+    if (!guard()) return;
+    aiProviderSettingsState = normalizeAiProviderSettings(response, fallback);
+    aiProviderSettingsState.custom = { apiBase: '', model: '', hasApiKey: false };
+    if (aiProviderSettingsState.mode === 'custom') aiProviderSettingsState.mode = 'official';
+    aiProviderSettingsDirty = false;
+    renderAiProviderSettings();
+    setAiProviderMessage('自定义模型配置已清除，AI 助手已恢复官方模型。', 'success');
+    refreshAiAssistantAfterProviderChange();
+  } catch (error) {
+    if (!guard() || error?.name === 'AbortError') return;
+    if (error?.status === 401) {
+      handleAiProviderUnauthorized();
+      return;
+    }
+    setAiProviderMessage('清除自定义模型配置失败，请稍后重试。', 'error');
+  } finally {
+    if (guard()) setAiProviderBusy(false);
+  }
+}
+
+function extractAiArtworkReferenceIds(content) {
+  return extractAiReferenceIds(content, 'artwork');
+}
+
+function makeRenderedAiError(messageElement, partialContent, detail) {
+  const target = messageElement || appendAiMessage('assistant', '', '', { mode: 'error' });
+  target?.classList.remove('ai-message--streaming');
+  target?.classList.add('ai-message--error');
+  const text = target?.querySelector('.ai-message-text');
+  const partial = stripAiArtworkMarkers(partialContent);
+  if (text) text.textContent = partial ? `${partial}\n\n回复中断：${detail}` : `回复中断：${detail}`;
+  if (target) applyAiMessageMode(target, 'error');
+  setAiModeStatus('error');
+  const error = new Error(detail);
+  error.aiRendered = true;
+  return error;
+}
+
+async function consumeAiEventStream(response, streamToken, username) {
+  if (!response.body?.getReader) throw new Error('当前浏览器不支持流式响应。');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let fullContent = '';
+  let assistantMessage = null;
+  let completed = false;
+  let protocolError = false;
+
+  const consumeFrame = async frame => {
+    if (streamToken !== aiStreamRequestToken || username !== aiSessionUsername) throw aiAbortError();
+    const dataText = frame.split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n');
+    if (!dataText || dataText === '[DONE]') return;
+    let eventData;
+    try {
+      eventData = JSON.parse(dataText);
+    } catch (error) {
+      protocolError = true;
+      return;
+    }
+    if (eventData?.data && typeof eventData.data === 'object') eventData = eventData.data;
+    if (eventData?.mode) setAiModeStatus(eventData.mode);
+    if (eventData?.error) {
+      const detail = aiErrorMessage(eventData.error, 'AI 回复中断，请重试。');
+      completed = true;
+      reader.cancel().catch(() => {});
+      throw makeRenderedAiError(assistantMessage, fullContent, detail);
+    }
+    if (eventData?.conversation_id) {
+      aiConversationId = String(eventData.conversation_id);
+      renderAiConversationList();
+      const clearButton = aiDom('aiClearConversationBtn');
+      if (clearButton) clearButton.disabled = false;
+    }
+    if (eventData?.content) {
+      fullContent += String(eventData.content);
+      if (!assistantMessage) assistantMessage = appendAiMessage('assistant', '', '', { streaming: true });
+      const text = assistantMessage?.querySelector('.ai-message-text');
+      if (text) text.textContent = fullContent;
+      aiScrollToLatest();
+    }
+    if (eventData?.done) {
+      if (protocolError) {
+        completed = true;
+        reader.cancel().catch(() => {});
+        throw makeRenderedAiError(assistantMessage, fullContent, 'AI 返回了无法解析的流式数据，请重试。');
+      }
+      const finalMode = normalizeAiMode(eventData.mode || aiAssistantMode);
+      if (!assistantMessage) {
+        assistantMessage = appendAiMessage('assistant', fullContent || '我暂时没有生成文字回复。', '', { mode: finalMode });
+      }
+      assistantMessage?.classList.remove('ai-message--streaming');
+      if (assistantMessage) applyAiMessageMode(assistantMessage, finalMode);
+      setAiModeStatus(finalMode);
+      const text = assistantMessage?.querySelector('.ai-message-text');
+      if (text) text.textContent = stripAiArtworkMarkers(fullContent || text.textContent);
+      const structured = referencedAiResults(fullContent, eventData);
+      renderAiResultCards(assistantMessage, structured);
+      const hydrationTasks = [];
+      if (!structured.artworks.length) {
+        hydrationTasks.push(loadAiArtworkReferences(assistantMessage, fullContent));
+      }
+      if (!structured.commissions.length) {
+        hydrationTasks.push(loadAiCommissionReferences(assistantMessage, fullContent));
+      }
+      if (hydrationTasks.length) await Promise.allSettled(hydrationTasks);
+      completed = true;
+    }
+  };
+
+  try {
+    while (!completed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() || '';
+      for (const frame of frames) {
+        await consumeFrame(frame);
+        if (completed) break;
+      }
+    }
+    buffer += decoder.decode();
+    if (!completed && buffer.trim()) await consumeFrame(buffer);
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.aiRendered) throw error;
+    reader.cancel().catch(() => {});
+    throw makeRenderedAiError(assistantMessage, fullContent, error?.message || 'AI 流式响应意外中断，请重试。');
+  }
+  if (!completed) {
+    const detail = protocolError
+      ? 'AI 返回了无法解析的流式数据，请重试。'
+      : 'AI 流式响应意外中断，请重试。';
+    throw makeRenderedAiError(assistantMessage, fullContent, detail);
+  }
+  reader.cancel().catch(() => {});
+}
+
+async function requestAiStream(content, streamToken, retryCount = 0) {
+  const username = aiSessionUsername;
+  const guard = () => streamToken === aiStreamRequestToken && username === aiSessionUsername;
+  if (!currentUser || !username || streamToken !== aiStreamRequestToken) throw aiAbortError();
+  const controller = new AbortController();
+  aiStreamController = controller;
+  const token = currentUser.access || JSON.parse(localStorage.getItem(STORAGE.authTokens) || '{}').access;
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_BASE}/recommend/chat/stream/`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ conversation_id: aiConversationId || null, content }),
+    signal: controller.signal
+  });
+  if (!isAiSessionCurrent(username, guard)) throw aiAbortError();
+  if (response.status === 401 && retryCount === 0) {
+    const access = await refreshAiAccessToken(username, guard);
+    if (!isAiSessionCurrent(username, guard)) throw aiAbortError();
+    if (access) return requestAiStream(content, streamToken, 1);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    if (!isAiSessionCurrent(username, guard)) throw aiAbortError();
+    const error = new Error(aiErrorMessage(payload));
+    error.status = response.status;
+    if (response.status === 401) {
+      clearSession();
+      openAuth('login', '登录状态已过期，请重新登录后使用 AI 助手。');
+    }
+    throw error;
+  }
+  await consumeAiEventStream(response, streamToken, username);
+}
+
+async function sendAiMessage(event) {
+  event?.preventDefault();
+  if (!requireLogin('请先登录后使用 AI 助手。') || aiIsStreaming) return;
+  ensureAiAssistantSession();
+  const input = aiDom('aiMessageInput');
+  const content = String(input?.value || '').trim();
+  if (!content) {
+    input?.focus();
+    return;
+  }
+  if (input) input.value = '';
+  aiHistoryRequestToken += 1;
+  const target = aiDom('aiMessageList');
+  if (target?.querySelector('.ai-welcome, .ai-empty-state')) target.replaceChildren();
+  appendAiMessage('user', content);
+  aiDom('aiAssistantShell')?.classList.add('ai-dialogue-open');
+
+  const streamToken = ++aiStreamRequestToken;
+  const username = aiSessionUsername;
+  setAiBusy(true);
+  try {
+    await requestAiStream(content, streamToken);
+    if (streamToken === aiStreamRequestToken && username === aiSessionUsername) {
+      await loadAiConversations({ silent: true });
+    }
+  } catch (error) {
+    aiDom('aiMessageList')?.querySelectorAll('.ai-message--streaming').forEach(message => {
+      message.classList.remove('ai-message--streaming');
+    });
+    if (error?.name === 'AbortError' || streamToken !== aiStreamRequestToken || username !== aiSessionUsername) return;
+    if (!error?.aiRendered) {
+      appendAiMessage('assistant', `抱歉，暂时无法完成回复。${error.message ? `\n${error.message}` : ''}`, '', { mode: 'error' });
+      setAiModeStatus('error');
+    }
+  } finally {
+    if (streamToken === aiStreamRequestToken && username === aiSessionUsername) {
+      aiStreamController = null;
+      setAiBusy(false);
+      input?.focus();
+    }
+  }
+}
+
+async function newAiConversation() {
+  if (!requireLogin('请先登录后使用 AI 助手。') || aiIsStreaming) return;
+  ensureAiAssistantSession();
+  const requestToken = ++aiMutationRequestToken;
+  const username = aiSessionUsername;
+  const guard = () => requestToken === aiMutationRequestToken && username === aiSessionUsername;
+  const button = aiDom('aiNewConversationBtn');
+  if (button) button.disabled = true;
+  try {
+    const response = await aiApiRequest('/recommend/chat/new/', { method: 'POST', body: JSON.stringify({}) }, guard);
+    if (!guard()) return;
+    aiConversationId = String(response?.conversation_id || '');
+    if (!aiConversationId) throw new Error('服务器没有返回对话编号。');
+    aiHistoryRequestToken += 1;
+    setAiModeStatus(aiModelConfigured === false ? 'local' : (aiModelConfigured === true ? 'ai' : 'checking'));
+    renderAiConversationList();
+    renderAiWelcome({ title: '新的对话', message: '想聊什么都可以；需要推荐时，再告诉我画风、题材、预算或委托需求。' });
+    aiDom('aiAssistantShell')?.classList.add('ai-dialogue-open');
+    aiDom('aiMessageInput')?.focus();
+  } catch (error) {
+    if (!guard()) return;
+    if (error.status === 401) {
+      clearSession();
+      openAuth('login', '登录状态已过期，请重新登录后使用 AI 助手。');
+    }
+    else alert(error.message || '新建对话失败，请稍后重试。');
+  } finally {
+    if (guard()) {
+      if (button) button.disabled = !currentUser;
+      setAiBusy(false);
+    }
+  }
+}
+
+async function clearAiConversation() {
+  if (!currentUser || !aiConversationId || aiIsStreaming) return;
+  if (!confirm('确定清空当前 AI 对话记录吗？此操作无法撤销。')) return;
+  const id = aiConversationId;
+  const requestToken = ++aiMutationRequestToken;
+  const username = aiSessionUsername;
+  const guard = () => requestToken === aiMutationRequestToken
+    && username === aiSessionUsername
+    && id === aiConversationId;
+  const button = aiDom('aiClearConversationBtn');
+  if (button) button.disabled = true;
+  try {
+    await aiApiRequest(`/recommend/chat/clear/?conversation_id=${encodeURIComponent(id)}`, { method: 'POST' }, guard);
+    if (!guard()) return;
+    aiHistoryRequestToken += 1;
+    aiConversations = aiConversations.filter(item => item.id !== id);
+    renderAiConversationList();
+    renderAiWelcome({ title: '对话已清空', message: '可以继续使用这个对话，也可以点击“＋”开始新的主题。' });
+  } catch (error) {
+    if (!guard()) return;
+    if (error.status === 401) {
+      clearSession();
+      openAuth('login', '登录状态已过期，请重新登录后使用 AI 助手。');
+    }
+    else alert(error.message || '清空对话失败，请稍后重试。');
+  } finally {
+    if (guard() && button) button.disabled = !currentUser || !aiConversationId;
+  }
+}
+
+function resetAiAssistantState() {
+  aiConversationRequestToken += 1;
+  aiHistoryRequestToken += 1;
+  aiMutationRequestToken += 1;
+  aiStreamRequestToken += 1;
+  aiStreamController?.abort();
+  aiStreamController = null;
+  aiConversationId = '';
+  aiConversations = [];
+  aiIsStreaming = false;
+  aiSessionUsername = '';
+  aiModelConfigured = null;
+  const input = aiDom('aiMessageInput');
+  if (input) input.value = '';
+  aiDom('aiAssistantShell')?.classList.remove('ai-dialogue-open');
+  setAiConversationNotice(currentUser ? '暂无对话，点击右上角“＋”开始' : '登录后可查看对话记录');
+  setAiModeStatus('checking');
+  renderAiWelcome();
+  setAiBusy(false);
+}
+
+function ensureAiAssistantSession() {
+  const username = currentUser?.username || '';
+  if (username !== aiSessionUsername) {
+    resetAiAssistantState();
+    aiSessionUsername = username;
+  }
+  setAiBusy(aiIsStreaming);
+  return username;
+}
+
+function openAiAssistant() {
+  if (!requireLogin('请先登录后使用 AI 助手。')) return;
+  switchPage('aiAssistant');
+}
+
+const aiAwareSwitchPage = switchPage;
+switchPage = function(pageId) {
+  if (pageId === 'aiAssistant' && !requireLogin('请先登录后使用 AI 助手。')) return;
+  const result = aiAwareSwitchPage(pageId);
+  aiDom('aiFloatButton')?.classList.toggle('active', pageId === 'aiAssistant');
+  if (pageId === 'aiAssistant' && currentUser) {
+    ensureAiAssistantSession();
+    aiDom('aiAssistantShell')?.classList.add('ai-dialogue-open');
+    loadAiConversations({ autoOpen: true });
+  }
+  return result;
+};
+
+const aiAwareClearSession = clearSession;
+clearSession = function() {
+  aiAwareClearSession();
+  resetAiAssistantState();
+  resetAiProviderSettingsState();
+};
+
+const aiAwareRefreshAuthUI = refreshAuthUI;
+refreshAuthUI = function() {
+  aiAwareRefreshAuthUI();
+  if (currentUser) {
+    ensureAiAssistantSession();
+    if (getActivePageId() === 'aiAssistant') loadAiConversations({ autoOpen: true, silent: true });
+    const settingsDetail = aiDom('settingsDetail');
+    if (settingsDetail && !settingsDetail.hidden && aiProviderSettingsUsername !== currentUser.username) {
+      loadAiProviderSettings({ force: true });
+    }
+  } else {
+    resetAiAssistantState();
+    resetAiProviderSettingsState();
+  }
+};
+
+document.querySelectorAll('input[name="aiProviderMode"]').forEach(input => {
+  input.addEventListener('change', () => {
+    renderAiProviderModeSelection(input.value);
+    markAiProviderSettingsDirty();
+  });
+});
+['aiCustomApiBase', 'aiCustomModel', 'aiCustomApiKey'].forEach(id => {
+  aiDom(id)?.addEventListener('input', markAiProviderSettingsDirty);
+});
+aiDom('saveAiProviderBtn')?.addEventListener('click', saveAiProviderSettings);
+aiDom('testAiProviderBtn')?.addEventListener('click', testAiProviderConnection);
+aiDom('clearAiProviderBtn')?.addEventListener('click', clearAiProviderSettings);
+
+aiDom('aiFloatButton')?.addEventListener('click', openAiAssistant);
+aiDom('aiModeStatus')?.addEventListener('click', openAiProviderSettingsFromAssistant);
+aiDom('aiNewConversationBtn')?.addEventListener('click', newAiConversation);
+aiDom('aiClearConversationBtn')?.addEventListener('click', clearAiConversation);
+aiDom('aiConversationBackBtn')?.addEventListener('click', () => {
+  aiDom('aiAssistantShell')?.classList.remove('ai-dialogue-open');
+});
+aiDom('aiConversationList')?.addEventListener('click', event => {
+  const item = event.target.closest('[data-ai-conversation-id]');
+  if (item && !aiIsStreaming) loadAiHistory(item.dataset.aiConversationId);
+});
+aiDom('aiMessageList')?.addEventListener('click', event => {
+  const suggestion = event.target.closest('[data-ai-prompt]');
+  if (suggestion) {
+    const input = aiDom('aiMessageInput');
+    if (input) input.value = suggestion.dataset.aiPrompt || '';
+    aiDom('aiComposer')?.requestSubmit();
+    return;
+  }
+  const artwork = event.target.closest('[data-ai-artwork-id]');
+  if (artwork) {
+    openAiArtworkById(artwork.dataset.aiArtworkId);
+    return;
+  }
+  const commission = event.target.closest('[data-ai-commission-id]');
+  if (commission) {
+    openAiCommissionById(commission.dataset.aiCommissionId);
+    return;
+  }
+  const artist = event.target.closest('[data-ai-artist-username]');
+  if (artist) openUserProfile(artist.dataset.aiArtistUsername);
+});
+aiDom('aiComposer')?.addEventListener('submit', sendAiMessage);
+aiDom('aiMessageInput')?.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    aiDom('aiComposer')?.requestSubmit();
+  }
+});
+
+resetAiProviderSettingsState();
+ensureAiAssistantSession();

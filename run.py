@@ -77,15 +77,23 @@ def serve_frontend(host, port, backend_port):
                 if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}
             }
             backend_request = request.Request(target, data=body, headers=headers, method=self.command)
+            response_started = False
             try:
-                with request.urlopen(backend_request, timeout=30) as response:
-                    payload = response.read()
+                with request.urlopen(backend_request, timeout=190) as response:
                     self.send_response(response.status)
                     for key, value in response.headers.items():
                         if key.lower() not in {"transfer-encoding", "connection", "content-encoding"}:
                             self.send_header(key, value)
                     self.end_headers()
-                    self.wfile.write(payload)
+                    response_started = True
+                    is_event_stream = response.headers.get_content_type() == "text/event-stream"
+                    while True:
+                        chunk = response.read1(8192) if is_event_stream else response.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        if is_event_stream:
+                            self.wfile.flush()
             except error.HTTPError as exc:
                 payload = exc.read()
                 self.send_response(exc.code)
@@ -94,7 +102,11 @@ def serve_frontend(host, port, backend_port):
                         self.send_header(key, value)
                 self.end_headers()
                 self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             except Exception as exc:
+                if response_started:
+                    return
                 payload = f'{{"code":502,"message":"Backend proxy failed: {exc}","data":null}}'.encode("utf-8")
                 self.send_response(502)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
