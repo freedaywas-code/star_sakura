@@ -212,6 +212,28 @@
           </section>
         </div>
       </section>
+      <section class="ai-match-panel" id="aiMatchPanel">
+        <div class="ai-match-head">
+          <div>
+            <span class="ai-match-kicker">AI RECOMMENDATION</span>
+            <h4>智能推荐画师</h4>
+            <p id="aiMatchHint">AI 根据委托需求和画师作品特征匹配推荐</p>
+          </div>
+          <div class="ai-match-actions">
+            <button class="commission-btn secondary compact" type="button" id="aiMatchRefreshBtn">重新匹配</button>
+            <button class="commission-btn compact" type="button" id="aiMatchInviteAllBtn" onclick="aiMatchInviteAll()">一键邀请</button>
+          </div>
+        </div>
+        <div class="ai-match-loading" id="aiMatchLoading" hidden>
+          <span class="loading-spinner"></span>
+          <span>AI 正在分析委托需求，寻找最合适的画师...</span>
+        </div>
+        <div class="ai-match-results" id="aiMatchResults"></div>
+        <div class="ai-match-empty" id="aiMatchEmpty" hidden>
+          <p>暂无推荐结果</p>
+          <button class="submit-btn" type="button" id="aiMatchTriggerBtn">开始 AI 匹配</button>
+        </div>
+      </section>
     </div>
   </div>
 

@@ -15,6 +15,7 @@ from common.response import ApiResponseMixin, ok
 from common.throttling import WriteScopedThrottleMixin
 
 from .models import CommissionBid, CommissionInvitation, CommissionOption, CustomRequest
+from .matching import match_artists
 from .serializers import (
     ArtistCandidateSerializer,
     CommissionBidSelectionSerializer,
@@ -46,6 +47,12 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
     search_fields = ["title", "type_label", "description", "requester__username", "artist__username"]
     ordering_fields = ["created_at", "updated_at", "budget", "progress"]
     ordering = ["-created_at"]
+    ai_match_throttle_scope = "ai_match"
+
+    def get_throttles(self):
+        if self.action in ["ai_match", "ai_match_invite"]:
+            self.throttle_scope = self.ai_match_throttle_scope
+        return super().get_throttles()
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
@@ -548,3 +555,104 @@ class CustomRequestViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiR
             custom_request.status = status_value
             custom_request.save(update_fields=["progress", "status", "updated_at"])
         return ok(CustomRequestSerializer(custom_request, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    def ai_match(self, request, pk=None):
+        custom_request = self.get_object()
+        self._ensure_requester_or_admin(custom_request)
+
+        try:
+            limit = int(request.data.get("limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+        limit = min(max(limit, 1), 20)
+
+        try:
+            result = match_artists(custom_request, limit=limit)
+            result["custom_request_id"] = custom_request.id
+            result["matched_at"] = timezone.now().isoformat()
+            return ok(result)
+        except ValueError as exc:
+            return ok({
+                "custom_request_id": custom_request.id,
+                "recommendations": [],
+                "total_candidates": 0,
+                "matched_at": timezone.now().isoformat(),
+                "error": str(exc)
+            }, code=503, status=503)
+
+    @action(detail=True, methods=["post"], url_path="ai-match/invite")
+    def ai_match_invite(self, request, pk=None):
+        custom_request = self.get_object()
+        self._ensure_requester_or_admin(custom_request)
+        self._ensure_open(custom_request)
+
+        try:
+            count = int(request.data.get("count", 3))
+        except (TypeError, ValueError):
+            count = 3
+        count = min(max(count, 1), 5)
+
+        message = request.data.get("message", "")[:1000]
+        if not message:
+            message = f"您好，AI 推荐您来承接我的委托「{custom_request.title}」，期待与您合作！"
+
+        try:
+            result = match_artists(custom_request, limit=count)
+        except ValueError as exc:
+            return ok({
+                "custom_request_id": custom_request.id,
+                "invited_count": 0,
+                "invitations": [],
+                "failed_count": 1,
+                "failed_reasons": [str(exc)]
+            }, code=503, status=503)
+
+        invited = []
+        failed = []
+
+        with transaction.atomic():
+            bids, invitations = self._lock_candidates(custom_request)
+            existing_artist_ids = {bid.artist_id for bid in bids} | {inv.artist_id for inv in invitations}
+
+            for rec in result["recommendations"]:
+                artist_id = rec["artist"]["id"]
+
+                if artist_id in existing_artist_ids:
+                    failed.append(f"画师 @{rec['artist']['username']} 已在报价或邀请列表中")
+                    continue
+                if artist_id == custom_request.requester_id:
+                    failed.append("不能邀请自己")
+                    continue
+
+                artist = User.objects.filter(id=artist_id, is_active=True).first()
+                if not artist:
+                    failed.append(f"画师 ID {artist_id} 不存在或已禁用")
+                    continue
+
+                amount = custom_request.budget if custom_request.budget > Decimal("0") else Decimal("500")
+
+                invitation = CommissionInvitation(
+                    custom_request=custom_request,
+                    artist=artist,
+                    invited_by=request.user,
+                    amount=amount,
+                    message=message,
+                    status=CommissionInvitation.Status.PENDING
+                )
+                invitation.save()
+                invited.append({
+                    "id": invitation.id,
+                    "artist_username": artist.username,
+                    "amount": str(invitation.amount),
+                    "status": invitation.status
+                })
+                existing_artist_ids.add(artist_id)
+
+        return ok({
+            "custom_request_id": custom_request.id,
+            "invited_count": len(invited),
+            "invitations": invited,
+            "failed_count": len(failed),
+            "failed_reasons": failed
+        })

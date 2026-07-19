@@ -306,3 +306,40 @@ class CommissionOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CommissionOption
         fields = ["code", "title", "price_label", "sort_order"]
+
+
+class ArtistRecommendationSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    display_name = serializers.CharField()
+    avatar = serializers.CharField(allow_blank=True)
+    bio = serializers.CharField(allow_blank=True)
+    skills = serializers.ListField(child=serializers.CharField())
+
+
+class SampleWorkSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    image = serializers.CharField(allow_blank=True)
+    category = serializers.CharField()
+
+
+class PriceRangeSerializer(serializers.Serializer):
+    min = serializers.FloatField()
+    max = serializers.FloatField()
+
+
+class RecommendationResultSerializer(serializers.Serializer):
+    artist = ArtistRecommendationSerializer()
+    confidence = serializers.IntegerField()
+    reason = serializers.CharField()
+    sample_works = SampleWorkSerializer(many=True)
+    price_range = PriceRangeSerializer()
+
+
+class AIMatchResultSerializer(serializers.Serializer):
+    custom_request_id = serializers.IntegerField()
+    recommendations = RecommendationResultSerializer(many=True)
+    total_candidates = serializers.IntegerField()
+    matched_at = serializers.DateTimeField()
+    used_fallback = serializers.BooleanField(default=False)

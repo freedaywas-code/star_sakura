@@ -4340,6 +4340,144 @@ async function respondCommissionInvitation(invitationId, decision) {
   );
 }
 
+let commissionAiRecommendations = [];
+let commissionAiMatchingLoading = false;
+let commissionAiMatchRequestToken = 0;
+
+async function loadAiRecommendations(commissionId) {
+  const panel = document.getElementById('aiMatchPanel');
+  const loading = document.getElementById('aiMatchLoading');
+  const results = document.getElementById('aiMatchResults');
+  const empty = document.getElementById('aiMatchEmpty');
+
+  if (!panel) return;
+
+  commissionAiMatchingLoading = true;
+  loading.hidden = false;
+  results.innerHTML = '';
+  empty.hidden = true;
+
+  const requestToken = ++commissionAiMatchRequestToken;
+
+  try {
+    const response = await apiRequest('/custom/' + encodeURIComponent(commissionId) + '/ai_match/', {
+      method: 'POST',
+      body: JSON.stringify({ limit: 5 })
+    });
+
+    if (requestToken !== commissionAiMatchRequestToken) return;
+
+    commissionAiRecommendations = response.recommendations || [];
+
+    if (commissionAiRecommendations.length > 0) {
+      renderAiRecommendations(response.recommendations);
+    } else {
+      empty.hidden = false;
+    }
+  } catch (error) {
+    console.error('AI 匹配失败:', error);
+    if (requestToken !== commissionAiMatchRequestToken) return;
+    empty.hidden = false;
+  } finally {
+    commissionAiMatchingLoading = false;
+    loading.hidden = true;
+  }
+}
+
+function renderAiRecommendations(recommendations) {
+  const container = document.getElementById('aiMatchResults');
+  container.innerHTML = recommendations.map(rec => {
+    const artist = rec.artist;
+    const avatar = normalizeImageSrc(artist.avatar || '');
+    const displayName = artist.display_name || artist.username;
+    const sampleWorks = rec.sample_works || [];
+    const priceRange = rec.price_range || {};
+
+    return '<div class="ai-match-card">' +
+      '<div class="ai-match-avatar">' +
+      (avatar ? `<img src="${escapeHTML(avatar)}" alt="${escapeHTML(displayName)}">` : escapeHTML(String(displayName).trim().slice(0, 1).toUpperCase() || '画')) +
+      '</div>' +
+      '<div class="ai-match-info">' +
+      '<h5>' + escapeHTML(displayName) + ' <small>@' + escapeHTML(artist.username) + '</small></h5>' +
+      '<p>' + escapeHTML(rec.reason || '') + '</p>' +
+      '<div class="ai-match-confidence">' +
+      '<div class="confidence-bar">' +
+      '<div class="confidence-fill" style="width: ' + Number(rec.confidence || 0) + '%"></div>' +
+      '</div>' +
+      '<span class="confidence-text">' + (rec.confidence || 0) + '%</span>' +
+      '</div>' +
+      (sampleWorks.length > 0 ? '<div class="ai-match-samples">' +
+        sampleWorks.slice(0, 3).map(w => '<div class="ai-match-sample">' +
+          (w.image ? `<img src="${normalizeImageSrc(w.image)}" alt="${escapeHTML(w.title)}">` : '') +
+          '</div>').join('') +
+        '</div>' : '') +
+      (priceRange.min > 0 || priceRange.max > 0 ? '<div class="ai-match-price">' +
+        '报价范围: ¥' + (priceRange.min || 0) + ' - ¥' + (priceRange.max || 0) +
+        '</div>' : '') +
+      '</div>' +
+      '<div class="ai-match-actions">' +
+      '<button class="commission-btn compact" onclick="inviteRecommendedArtist(' + rec.artist.id + ')">邀请</button>' +
+      '<button class="commission-btn secondary compact" onclick="openUserProfile(' + rec.artist.id + ')">查看</button>' +
+      '</div>' +
+      '</div>';
+  }).join('');
+}
+
+async function inviteRecommendedArtist(artistId) {
+  if (!activeCommissionDetailId) return;
+  const rec = commissionAiRecommendations.find(r => r.artist.id === artistId);
+  if (!rec) return;
+
+  const amount = rec.price_range?.max || rec.price_range?.min || 500;
+  const message = '您好，AI 推荐您来承接我的委托，期待与您合作！';
+
+  const success = await runCommissionMarketplaceAction(
+    () => apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/invitations/', {
+      method: 'POST',
+      body: JSON.stringify({ artist_id: artistId, amount, message })
+    }),
+    '已发送邀请给 ' + (rec.artist.display_name || rec.artist.username)
+  );
+
+  if (success) {
+    await loadAiRecommendations(activeCommissionDetailId);
+  }
+}
+
+async function aiMatchInviteAll() {
+  if (!activeCommissionDetailId) return;
+  if (!commissionAiRecommendations.length) {
+    alert('请先获取 AI 推荐结果。');
+    return;
+  }
+
+  const count = Math.min(commissionAiRecommendations.length, 3);
+  if (!confirm('确定邀请 AI 推荐的前 ' + count + ' 位画师吗？')) return;
+
+  try {
+    const response = await apiRequest('/custom/' + encodeURIComponent(activeCommissionDetailId) + '/ai-match/invite/', {
+      method: 'POST',
+      body: JSON.stringify({ count })
+    });
+
+    alert('已邀请 ' + (response.invited_count || 0) + ' 位画师。' +
+      (response.failed_reasons?.length ? '\n失败：' + response.failed_reasons.join('；') : ''));
+
+    await refreshActiveCommissionDetail();
+    await loadAiRecommendations(activeCommissionDetailId);
+  } catch (error) {
+    alert(error.message || '邀请失败，请稍后重试。');
+  }
+}
+
+document.getElementById('aiMatchRefreshBtn')?.addEventListener('click', () => {
+  if (activeCommissionDetailId) loadAiRecommendations(activeCommissionDetailId);
+});
+
+document.getElementById('aiMatchTriggerBtn')?.addEventListener('click', () => {
+  if (activeCommissionDetailId) loadAiRecommendations(activeCommissionDetailId);
+});
+
 document.getElementById('commissionDetailRefresh')?.addEventListener('click', refreshActiveCommissionDetail);
 
 document.getElementById('publishImageBox').addEventListener('click', () => {

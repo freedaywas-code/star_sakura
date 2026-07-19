@@ -164,6 +164,7 @@ REST_FRAMEWORK = {
         "login": os.getenv("DRF_LOGIN_THROTTLE_RATE", "10/min"),
         "write": os.getenv("DRF_WRITE_THROTTLE_RATE", "120/min"),
         "ai_chat": os.getenv("DRF_AI_THROTTLE_RATE", "20/min"),
+        "ai_match": os.getenv("DRF_AI_MATCH_THROTTLE_RATE", "5/min"),
     },
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
 }
