@@ -14,7 +14,9 @@ from .serializers import ReviewSerializer
 
 
 class ReviewViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiResponseMixin, viewsets.ModelViewSet):
-    queryset = Review.objects.select_related("order", "artwork", "reviewer", "target_user").prefetch_related("liked_users").all()
+    queryset = Review.objects.select_related(
+        "order", "artwork", "reviewer", "target_user", "parent", "parent__reviewer"
+    ).prefetch_related("liked_users").all()
     serializer_class = ReviewSerializer
     filterset_fields = ["artwork", "reviewer", "target_user", "rating"]
     search_fields = ["content", "artwork__title", "reviewer__username", "target_user__username"]
@@ -35,10 +37,11 @@ class ReviewViewSet(CachedPublicReadMixin, WriteScopedThrottleMixin, ApiResponse
     def perform_create(self, serializer):
         order = serializer.validated_data.get("order")
         artwork = serializer.validated_data["artwork"]
+        parent = serializer.validated_data.get("parent")
         reviewer = self.request.user
         if order and order.buyer_id != reviewer.id:
             raise ValidationError("Only the buyer can review this order.")
-        target_user = order.seller if order else artwork.owner
+        target_user = parent.reviewer if parent else (order.seller if order else artwork.owner)
         serializer.save(reviewer=reviewer, target_user=target_user)
 
     def _ensure_reviewer_or_admin(self, review):

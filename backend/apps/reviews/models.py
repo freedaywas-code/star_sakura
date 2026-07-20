@@ -6,6 +6,7 @@ from django.db import models
 class Review(models.Model):
     order = models.OneToOneField("orders.Order", on_delete=models.CASCADE, related_name="review", verbose_name="订单", blank=True, null=True)
     artwork = models.ForeignKey("artworks.Artwork", on_delete=models.CASCADE, related_name="reviews", verbose_name="画作")
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, related_name="replies", verbose_name="父评价", blank=True, null=True)
     reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="given_reviews", verbose_name="评价人")
     target_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="received_reviews", verbose_name="被评价人")
     rating = models.PositiveSmallIntegerField("评分", validators=[MinValueValidator(1), MaxValueValidator(5)])
@@ -22,6 +23,10 @@ class Review(models.Model):
         verbose_name_plural = "评价"
         ordering = ["-created_at"]
         indexes = [
+            models.Index(
+                fields=["artwork", "parent", "created_at"],
+                name="reviews_art_parent_created_idx",
+            ),
             models.Index(fields=["artwork", "-created_at"]),
             models.Index(fields=["reviewer", "-created_at"]),
             models.Index(fields=["target_user", "-created_at"]),

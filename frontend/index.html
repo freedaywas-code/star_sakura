@@ -4,7 +4,7 @@
   
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>星漫</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260720-4">
 </head>
 <body>
   <section class="auth-page page-section" id="auth">
@@ -83,17 +83,21 @@
       </div>
       <div class="artwork-detail-side">
         <div class="artwork-detail-head">
+          <button class="detail-close detail-back" type="button" id="detailClose" aria-label="返回作品列表">←</button>
           <div>
             <h3 id="detailTitle">作品详情</h3>
             <span class="artwork-detail-tag" id="detailTag">原创作品</span>
             <button class="user-profile-link detail-owner-link" type="button" id="detailOwner" hidden></button>
           </div>
-          <button class="detail-close" type="button" id="detailClose" aria-label="关闭详情">×</button>
         </div>
         <div class="comment-list" id="commentList"></div>
         <form class="comment-form" id="commentForm">
           <input id="commentCardId" type="hidden">
           <textarea id="commentText" placeholder="留下你的评价，可以输入文字和表情"></textarea>
+          <div class="comment-reply-banner" id="artworkReplyBanner" hidden>
+            <span id="artworkReplyHint"></span>
+            <button type="button" id="cancelArtworkReplyBtn">取消回复</button>
+          </div>
           <input id="commentImageInput" type="file" accept="image/*" hidden>
           <div class="comment-tools">
             <button class="toolbar-btn secondary" type="button" id="commentImageBtn">选择图片</button>
@@ -228,11 +232,24 @@
       <li><a href="#ai" data-page="ai">AI 助手</a></li>
       <li><a href="#me" data-page="me">我</a></li>
     </ul>
+    <button class="mobile-search-trigger" type="button" id="mobileSearchBtn" aria-label="打开搜索">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+    </button>
     <div class="nav-account">
-      <form class="nav-search" id="navSearchForm" role="search">
-        <input id="navSearchInput" type="search" placeholder="搜索作品、委托、灵感" autocomplete="off">
-        <button type="submit" aria-label="搜索">搜索</button>
-      </form>
+      <div class="nav-search-wrap" id="navSearchWrap">
+        <form class="nav-search" id="navSearchForm" role="search">
+          <button class="mobile-search-close" type="button" id="mobileSearchCloseBtn" aria-label="关闭搜索">←</button>
+          <input id="navSearchInput" type="search" placeholder="搜索作品、委托、灵感" autocomplete="off" aria-controls="navSearchRecommendations" aria-expanded="false">
+          <button type="submit" aria-label="搜索">搜索</button>
+        </form>
+        <section class="nav-search-recommendations" id="navSearchRecommendations" hidden>
+          <div class="nav-search-recommendation-head">
+            <div><span>JUST FOR YOU</span><h3>猜你喜欢</h3></div>
+            <button type="button" id="refreshRecommendationsBtn" aria-label="换一批猜你喜欢">↻ 换一批</button>
+          </div>
+          <div class="guess-like-track" id="guessLikeGrid" aria-live="polite"></div>
+        </section>
+      </div>
       <button class="nav-publish" type="button" id="publishNavBtn">发布</button>
       <button class="nav-message" type="button" id="messageNavBtn" aria-label="私信">
         <span aria-hidden="true">私信</span>
@@ -344,7 +361,11 @@
   <section class="section gallery page-section" id="gallery">
     <div class="section-title fade-in visible">
       <h2>角色画廊</h2>
-      <p>每一个角色都有属于自己的故事</p>
+      <p>推荐会根据你的浏览、停留、点赞和收藏持续调整</p>
+    </div>
+    <div class="personalized-feed-title fade-in visible">
+      <div><span></span><h3>个性化作品流</h3></div>
+      <small>点开、停留和“不感兴趣”都会影响后续排序</small>
     </div>
     <div class="gallery-grid" id="galleryGrid"></div>
     <div class="gallery-pagination" id="galleryPagination" aria-label="作品加载状态"></div>
@@ -686,11 +707,16 @@
     <div class="message-shell fade-in visible">
       <aside class="conversation-pane">
         <div class="message-pane-head">
-          <div>
-            <span class="message-kicker">Conversations</span>
-            <h3>会话</h3>
+          <div class="message-pane-title">
+            <button class="message-page-back" type="button" id="messagePageBackBtn" aria-label="退出私信">←</button>
+            <div>
+              <span class="message-kicker">Conversations</span>
+              <h3>会话</h3>
+            </div>
           </div>
-          <button class="message-icon-btn" type="button" id="refreshConversationsBtn" aria-label="刷新会话">↻</button>
+          <button class="message-refresh-btn" type="button" id="refreshConversationsBtn" aria-label="刷新会话">
+            <span aria-hidden="true">↻</span><span>刷新</span>
+          </button>
         </div>
         <div class="conversation-list" id="conversationList"><div class="message-empty">正在加载会话...</div></div>
       </aside>
@@ -706,15 +732,21 @@
               <span class="message-avatar" id="chatAvatar">画</span>
               <span><strong id="chatDisplayName">创作者</strong><small id="chatUsername">@user</small></span>
             </button>
-            <span class="message-limit-badge" id="messageLimitBadge">剩余 3 条</span>
+            <div class="chat-head-actions">
+              <span class="message-limit-badge" id="messageLimitBadge">剩余 3 条</span>
+              <button class="chat-profile-btn" type="button" id="chatProfileBtn">查看主页</button>
+            </div>
           </header>
-          <div class="message-history" id="messageHistory"></div>
+          <div class="message-history" id="messageHistory" aria-live="polite"></div>
           <button class="load-message-history" type="button" id="loadOlderMessagesBtn" hidden>加载更早消息</button>
           <form class="message-composer" id="messageComposer">
-            <textarea id="messageBody" maxlength="2000" placeholder="输入私信内容，Enter 发送，Shift + Enter 换行"></textarea>
+            <div class="message-compose-main">
+              <textarea id="messageBody" maxlength="2000" rows="1" placeholder="输入消息，Enter 发送"></textarea>
+              <button class="message-send-btn" type="submit" id="sendMessageBtn"><span>发送</span><span aria-hidden="true">↑</span></button>
+            </div>
             <div class="message-composer-foot">
               <span id="messageComposerHint">未互关时，你最多可以发送 3 条消息。</span>
-              <button class="submit-btn" type="submit" id="sendMessageBtn">发送</button>
+              <small>Shift + Enter 换行</small>
             </div>
           </form>
         </div>
@@ -787,6 +819,6 @@
     </div>
   </footer>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20260720-4"></script>
 
 </body></html>

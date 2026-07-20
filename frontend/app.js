@@ -22,6 +22,10 @@ let galleryInfiniteObserver = null;
 let galleryApiPage = 1;
 let galleryApiHasMore = false;
 let galleryApiLoading = false;
+let galleryImpressionObserver = null;
+let activeArtworkDwell = null;
+let guessLikeItems = [];
+const sessionArtworkImpressions = new Set();
 const API_BASE = (() => {
   const override = new URLSearchParams(location.search).get('api') || localStorage.getItem('starSakuraApiBase');
   if (override) return override.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
@@ -51,6 +55,9 @@ let commissionArtistSearchError = '';
 let editingSkills = [];
 let artworkCommentSyncTimer = null;
 let artworkCommentSyncBusy = false;
+let artworkReviewCache = [];
+let artworkReplyTarget = '';
+const expandedArtworkReplies = new Set();
 const COMMENT_SYNC_INTERVAL = 1000;
 
 const escapeHTML = (value = '') => String(value).replace(/[&<>'\"]/g, char => ({
@@ -128,7 +135,9 @@ function artworkToCardData(item) {
     tag,
     imageSrc: normalizeImageSrc(item.image_url || item.image || ''),
     recommendationScore: item.recommendation_score || 0,
-    matchedTags: Array.isArray(item.matched_tags) ? item.matched_tags : []
+    matchedTags: Array.isArray(item.matched_tags) ? item.matched_tags : [],
+    recommendationReason: item.recommendation_reason || '为你精选',
+    isExploration: Boolean(item.is_exploration)
   };
 }
 
@@ -198,7 +207,26 @@ function userArtworkViews() {
   }, {});
 }
 
-function buildArtworkRecommendationPayload() {
+function artworkCountMap(source = {}) {
+  return Object.entries(source).reduce((result, [key, count]) => {
+    const [type, id] = String(key).split(':');
+    if (type === 'artwork' && id) result[id] = Number(count || 0);
+    return result;
+  }, {});
+}
+
+function getRecommendationSeed(forceNew = false) {
+  const key = 'starSakuraRecommendationSeed';
+  if (forceNew) sessionStorage.removeItem(key);
+  let seed = sessionStorage.getItem(key);
+  if (!seed) {
+    seed = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem(key, seed);
+  }
+  return seed;
+}
+
+function buildArtworkRecommendationPayload(mode = 'feed') {
   const state = getInteractions();
   const bucket = getUserInteractionBucket(state) || defaultUserInteractionBucket();
   return {
@@ -207,7 +235,12 @@ function buildArtworkRecommendationPayload() {
     likes: artworkIdsFromInteractionKeys(bucket.liked),
     favorites: artworkIdsFromInteractionKeys(bucket.favorites),
     comments: state.artwork?.comments || {},
-    history: (bucket.history || []).filter(key => String(key).startsWith('artwork:'))
+    impressions: artworkCountMap(bucket.impressions),
+    dwell: artworkCountMap(bucket.dwell),
+    dislikes: (bucket.disliked || []).filter(key => String(key).startsWith('artwork:')),
+    history: (bucket.history || []).filter(key => String(key).startsWith('artwork:')),
+    seed: getRecommendationSeed(),
+    mode
   };
 }
 
@@ -230,6 +263,7 @@ function buildBehaviorTagWeights(items) {
   Object.entries(payload.views).forEach(([id, count]) => add(id, Math.min(Number(count || 0), 8)));
   Object.entries(payload.likes).forEach(([id, count]) => add(id, Number(count || 0) * 4));
   Object.entries(payload.favorites).forEach(([id, count]) => add(id, Number(count || 0) * 6));
+  Object.entries(payload.dwell).forEach(([id, seconds]) => add(id, Math.min(Math.log1p(seconds) * 1.6, 10)));
   payload.history.forEach((key, index) => add(key.split(':')[1], Math.max(0.5, 3 - index * 0.08)));
   return weights;
 }
@@ -254,6 +288,11 @@ function scoreLocalArtwork(item, behaviorWeights = {}) {
   score += Math.log1p(counts.likes) * 2.2;
   score += Math.log1p(counts.favorites) * 3;
   score += Math.log1p(counts.comments || item.reviewsCount || 0) * 1.4;
+  score += Math.min(Math.log1p(payload.dwell[item.id] || 0) * 0.65, 3.8);
+  if ((payload.impressions[item.id] || 0) > 1 && !payload.likes[item.id] && !payload.favorites[item.id]) {
+    score -= Math.log1p(payload.impressions[item.id] - 1) * 1.35;
+  }
+  if (payload.dislikes.some(key => String(key).endsWith(`:${item.id}`))) score -= 1000;
   return score;
 }
 
@@ -526,7 +565,7 @@ function defaultInteractionState() {
 }
 
 function defaultUserInteractionBucket() {
-  return { liked: [], favorites: [], history: [], views: {} };
+  return { liked: [], favorites: [], disliked: [], history: [], views: {}, impressions: {}, dwell: {} };
 }
 
 function getInteractions() {
@@ -535,14 +574,15 @@ function getInteractions() {
   state.artwork = { ...defaultInteractionState().artwork, ...(state.artwork || {}) };
   state.inspiration = { ...defaultInteractionState().inspiration, ...(state.inspiration || {}) };
   state.users = state.users || {};
-  if (currentUser?.username && !state.users[currentUser.username]) {
-    state.users[currentUser.username] = defaultUserInteractionBucket();
-  }
-  if (currentUser?.username) {
-    state.users[currentUser.username] = {
+  const interactionUser = currentUser?.username || '__guest__';
+  if (!state.users[interactionUser]) state.users[interactionUser] = defaultUserInteractionBucket();
+  if (interactionUser) {
+    state.users[interactionUser] = {
       ...defaultUserInteractionBucket(),
-      ...(state.users[currentUser.username] || {}),
-      views: state.users[currentUser.username]?.views || {}
+      ...(state.users[interactionUser] || {}),
+      views: state.users[interactionUser]?.views || {},
+      impressions: state.users[interactionUser]?.impressions || {},
+      dwell: state.users[interactionUser]?.dwell || {}
     };
   }
   return state;
@@ -557,13 +597,15 @@ function interactionKey(type, id) {
 }
 
 function getUserInteractionBucket(state = getInteractions()) {
-  if (!currentUser?.username) return null;
-  state.users[currentUser.username] = {
+  const interactionUser = currentUser?.username || '__guest__';
+  state.users[interactionUser] = {
     ...defaultUserInteractionBucket(),
-    ...(state.users[currentUser.username] || {}),
-    views: state.users[currentUser.username]?.views || {}
+    ...(state.users[interactionUser] || {}),
+    views: state.users[interactionUser]?.views || {},
+    impressions: state.users[interactionUser]?.impressions || {},
+    dwell: state.users[interactionUser]?.dwell || {}
   };
-  return state.users[currentUser.username];
+  return state.users[interactionUser];
 }
 
 function getInteractionCounts(type, id) {
@@ -589,7 +631,6 @@ function bumpInteraction(type, id, field, amount = 1) {
 }
 
 function addUserHistory(type, id) {
-  if (!currentUser?.username) return;
   const state = getInteractions();
   const bucket = getUserInteractionBucket(state);
   const key = interactionKey(type, id);
@@ -604,6 +645,66 @@ function recordView(type, id) {
   addUserHistory(type, id);
   updateInteractionDisplays();
   if (currentUser) renderMePage();
+}
+
+function recordArtworkImpression(id) {
+  const key = interactionKey('artwork', id);
+  if (!id || sessionArtworkImpressions.has(key)) return;
+  sessionArtworkImpressions.add(key);
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state);
+  bucket.impressions[key] = Number(bucket.impressions[key] || 0) + 1;
+  saveInteractions(state);
+}
+
+function observeGalleryCard(card) {
+  if (!('IntersectionObserver' in window)) return;
+  if (!galleryImpressionObserver) {
+    galleryImpressionObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        const target = entry.target;
+        window.clearTimeout(Number(target.dataset.impressionTimer || 0));
+        delete target.dataset.impressionTimer;
+        if (!entry.isIntersecting || entry.intersectionRatio < 0.6 || target.hidden) return;
+        target.dataset.impressionTimer = String(window.setTimeout(() => {
+          if (target.isConnected && !target.hidden) recordArtworkImpression(target.dataset.id);
+        }, 850));
+      });
+    }, { threshold: [0.6] });
+  }
+  galleryImpressionObserver.observe(card);
+}
+
+function finishArtworkDwell() {
+  if (!activeArtworkDwell) return;
+  const { id, startedAt } = activeArtworkDwell;
+  activeArtworkDwell = null;
+  const seconds = Math.min(300, Math.round((Date.now() - startedAt) / 1000));
+  if (seconds < 2) return;
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state);
+  const key = interactionKey('artwork', id);
+  bucket.dwell[key] = Number(bucket.dwell[key] || 0) + seconds;
+  saveInteractions(state);
+}
+
+function markArtworkNotInterested(card) {
+  if (!card) return;
+  const id = String(card.dataset.id || '');
+  const state = getInteractions();
+  const bucket = getUserInteractionBucket(state);
+  const key = interactionKey('artwork', id);
+  bucket.disliked = [key, ...bucket.disliked.filter(item => item !== key)].slice(0, 100);
+  saveInteractions(state);
+  if (activeArtworkDwell?.id === id) closeArtworkDetail();
+  card.classList.add('recommendation-dismissed');
+  window.setTimeout(() => {
+    galleryImpressionObserver?.unobserve(card);
+    card.remove();
+    guessLikeItems = guessLikeItems.filter(item => String(item.id) !== id);
+    renderGuessYouLike(guessLikeItems);
+    renderGalleryPagination();
+  }, 180);
 }
 
 function toggleUserInteraction(kind, type, id) {
@@ -713,6 +814,7 @@ function refreshAuthUI() {
 
 function switchPage(pageId) {
   if (pageId === 'about') pageId = 'me';
+  closeMobileSearch();
   if (pageId === 'me' && !requireLogin('请先登录后查看个人页面。')) return;
   if (pageId === 'publish' && !requireLogin('请先登录后再发布作品。')) return;
   if (pageId === 'contact' && !currentUser) return openAuth('login', '请先登录后再使用委托功能。');
@@ -813,6 +915,26 @@ function closeImagePreview() {
   document.getElementById('previewImage').removeAttribute('src');
 }
 
+function interactionIcon(kind) {
+  const icons = {
+    views: '<svg class="interaction-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.3-6 9.2-6 9.2 6 9.2 6-3.3 6-9.2 6-9.2-6-9.2-6Z"></path><circle cx="12" cy="12" r="2.7"></circle></svg>',
+    like: '<svg class="interaction-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.2-8.8 10.2S3.2 13.8 3.2 8.8A4.7 4.7 0 0 1 12 6.5a4.7 4.7 0 0 1 8.8 2.3Z"></path></svg>',
+    comment: '<svg class="interaction-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 3v-14Z"></path></svg>',
+    favorite: '<svg class="interaction-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11v17L12 17l-5.5 3.5v-17Z"></path></svg>',
+    dislike: '<svg class="interaction-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="m8.5 8.5 7 7m0-7-7 7"></path></svg>'
+  };
+  return icons[kind] || '';
+}
+
+function setInteractionMetric(element, count, label) {
+  if (!element) return;
+  const value = element.querySelector('[data-stat-count]');
+  if (value) value.textContent = String(count);
+  else element.textContent = `${label} ${count}`;
+  element.setAttribute('aria-label', `${label} ${count}`);
+  element.title = `${label} ${count}`;
+}
+
 updateCommentButtons = function() {
   document.querySelectorAll('.character-card').forEach(card => {
     const id = card.dataset.id;
@@ -822,14 +944,14 @@ updateCommentButtons = function() {
     const like = card.querySelector('[data-artwork-stat="likes"]');
     const comment = card.querySelector('[data-artwork-stat="comments"]');
     const favorite = card.querySelector('[data-artwork-stat="favorites"]');
-    if (view) view.textContent = `浏览 ${counts.views}`;
+    setInteractionMetric(view, counts.views, '浏览');
     if (like) {
-      like.textContent = `赞 ${counts.likes}`;
+      setInteractionMetric(like, counts.likes, '点赞');
       like.classList.toggle('active', userHasInteraction('liked', 'artwork', id));
     }
-    if (comment) comment.textContent = `评 ${commentCount}`;
+    setInteractionMetric(comment, commentCount, '评论');
     if (favorite) {
-      favorite.textContent = `藏 ${counts.favorites}`;
+      setInteractionMetric(favorite, counts.favorites, '收藏');
       favorite.classList.toggle('active', userHasInteraction('favorites', 'artwork', id));
     }
   });
@@ -844,6 +966,7 @@ normalizeCommentButtons = function() {
       const view = document.createElement('span');
       view.className = 'artwork-view-count';
       view.dataset.artworkStat = 'views';
+      view.innerHTML = `${interactionIcon('views')}<span data-stat-count>0</span>`;
       image.appendChild(view);
     }
     let meta = card.querySelector('.character-meta');
@@ -854,9 +977,10 @@ normalizeCommentButtons = function() {
     const strip = document.createElement('div');
     strip.className = 'interaction-strip';
     strip.innerHTML = `
-      <button type="button" data-artwork-action="like" data-artwork-stat="likes">赞 0</button>
-      <button type="button" data-artwork-action="comment" data-artwork-stat="comments">评 0</button>
-      <button type="button" data-artwork-action="favorite" data-artwork-stat="favorites">藏 0</button>
+      <button type="button" data-artwork-action="like" data-artwork-stat="likes" aria-label="点赞 0">${interactionIcon('like')}<span data-stat-count>0</span></button>
+      <button type="button" data-artwork-action="comment" data-artwork-stat="comments" aria-label="评论 0">${interactionIcon('comment')}<span data-stat-count>0</span></button>
+      <button type="button" data-artwork-action="favorite" data-artwork-stat="favorites" aria-label="收藏 0">${interactionIcon('favorite')}<span data-stat-count>0</span></button>
+      <button type="button" class="not-interested-btn" data-artwork-action="dislike" title="减少相似推荐">${interactionIcon('dislike')}<span>不感兴趣</span></button>
     `;
     strip.querySelector('[data-artwork-action="like"]').addEventListener('click', event => {
       event.stopPropagation();
@@ -870,6 +994,10 @@ normalizeCommentButtons = function() {
       event.stopPropagation();
       toggleUserInteraction('favorites', 'artwork', card.dataset.id);
     });
+    strip.querySelector('[data-artwork-action="dislike"]').addEventListener('click', event => {
+      event.stopPropagation();
+      markArtworkNotInterested(card);
+    });
     meta.appendChild(strip);
   });
   updateCommentButtons();
@@ -882,7 +1010,59 @@ function updateInteractionDisplays() {
 
 async function fetchArtworkReviews(cardId) {
   const data = await apiRequest(`/reviews/?artwork=${encodeURIComponent(cardId)}&page_size=100`);
-  return apiList(data);
+  artworkReviewCache = apiList(data);
+  return artworkReviewCache;
+}
+
+function updateArtworkReplyComposer() {
+  const target = artworkReplyTarget
+    ? artworkReviewCache.find(item => String(item.id) === String(artworkReplyTarget))
+    : null;
+  const banner = document.getElementById('artworkReplyBanner');
+  const hint = document.getElementById('artworkReplyHint');
+  const textarea = document.getElementById('commentText');
+  const submit = document.querySelector('#commentForm .submit-btn');
+  const username = target?.reviewer_username || target?.owner || '';
+  if (banner) banner.hidden = !target;
+  if (hint) hint.textContent = target ? `正在回复 @${username || '这条评价'}` : '';
+  if (textarea) textarea.placeholder = target
+    ? `回复 @${username || '这条评价'}`
+    : '留下你的评价，可以输入文字和表情';
+  if (submit) submit.textContent = target ? '发布回复' : '发布评价';
+}
+
+function renderArtworkReviewItem(item, isReply = false) {
+  const users = getUsers();
+  const username = item.reviewer_username || item.owner || 'admin';
+  const user = users[username] || { username, profile: {} };
+  const name = getDisplayName(user) || username;
+  const avatar = user.profile?.avatar || '';
+  const avatarHtml = avatar
+    ? `<img src="${escapeHTML(avatar)}" alt="${escapeHTML(name)}">`
+    : escapeHTML(name.slice(0, 1).toUpperCase());
+  const imageSrc = normalizeImageSrc(item.image_url || item.imageSrc || '');
+  const imageHtml = imageSrc ? `<img class="comment-image" src="${escapeHTML(imageSrc)}" alt="评论图片">` : '';
+  const likeCount = Number(item.like_count || 0);
+  const likedClass = item.liked ? ' liked' : '';
+  const reviewId = String(item.id || '');
+  const replyTo = isReply ? (item.parent_reviewer_username || '') : '';
+  return `
+    <div class="comment-item${isReply ? ' reply' : ''}">
+      <div class="comment-avatar">${avatarHtml}</div>
+      <div class="comment-bubble">
+        <div class="comment-author-line">
+          <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(username)}">${escapeHTML(name)}</button>
+          ${replyTo ? `<span>回复 @${escapeHTML(replyTo)}</span>` : ''}
+        </div>
+        <div class="comment-text">${escapeHTML(item.content || item.text || '')}</div>
+        ${imageHtml}
+        <div class="comment-time">${escapeHTML(item.created_at || item.createdAt || '')}</div>
+        <div class="comment-actions-row">
+          ${reviewId ? `<button class="comment-like${likedClass}" type="button" onclick="toggleReviewLike('${escapeHTML(reviewId)}')">${interactionIcon('like')}<span>赞 ${likeCount}</span></button>` : ''}
+          ${!isReply && reviewId ? `<button class="comment-reply" type="button" onclick="showArtworkReply('${escapeHTML(reviewId)}')">回复</button>` : ''}
+        </div>
+      </div>
+    </div>`;
 }
 
 async function renderArtworkComments(cardId) {
@@ -914,39 +1094,53 @@ async function renderArtworkComments(cardId) {
     saveInteractions(state);
     updateCommentButtons();
   }
-  if (!items.length) {
+  const rootItems = items.filter(item => !item.parent);
+  if (!rootItems.length) {
     list.innerHTML = '<div class="empty-state">还没有评价，来留下第一条想法吧。</div>';
+    updateArtworkReplyComposer();
     updateCommentButtons();
     return;
   }
-  const users = getUsers();
-  list.innerHTML = items.map(item => {
-    const username = item.reviewer_username || item.owner || 'admin';
-    const user = users[username] || { username, profile: {} };
-    const name = getDisplayName(user);
-    const avatar = user.profile?.avatar || '';
-    const avatarHtml = avatar
-      ? `<img src="${avatar}" alt="${escapeHTML(name)}">`
-      : escapeHTML(name.slice(0, 1).toUpperCase());
-    const imageSrc = item.image_url || item.imageSrc || '';
-    const imageHtml = imageSrc ? `<img class="comment-image" src="${imageSrc}" alt="评论图片">` : '';
-    const likeCount = item.like_count || 0;
-    const likedClass = item.liked ? ' liked' : '';
-    const reviewId = item.id || '';
-    return `
-      <div class="comment-item">
-        <div class="comment-avatar">${avatarHtml}</div>
-        <div class="comment-bubble">
-          <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(username)}">${escapeHTML(name)}</button>
-          <div class="comment-text">${escapeHTML(item.content || item.text || '')}</div>
-          ${imageHtml}
-          <div class="comment-time">${escapeHTML(item.created_at || item.createdAt || '')}</div>
-          ${reviewId ? `<button class="comment-like${likedClass}" type="button" onclick="toggleReviewLike('${reviewId}')">赞 ${likeCount}</button>` : ''}
-        </div>
-      </div>
-    `;
+  const repliesByParent = items.reduce((result, item) => {
+    if (!item.parent) return result;
+    const key = String(item.parent);
+    if (!result[key]) result[key] = [];
+    result[key].push(item);
+    return result;
+  }, {});
+  list.innerHTML = rootItems.map(item => {
+    const key = String(item.id);
+    const replies = repliesByParent[key] || [];
+    const expanded = expandedArtworkReplies.has(key);
+    const visibleReplies = replies.slice(0, expanded ? 30 : 6);
+    const expandButton = replies.length > 6
+      ? `<button class="comment-expand" type="button" onclick="toggleArtworkReplies('${escapeHTML(key)}')">${expanded ? '收起回复' : `展开更多回复（${replies.length}）`}</button>`
+      : '';
+    return `${renderArtworkReviewItem(item)}${visibleReplies.length
+      ? `<div class="comment-replies">${visibleReplies.map(reply => renderArtworkReviewItem(reply, true)).join('')}${expandButton}</div>`
+      : ''}`;
   }).join('');
+  updateArtworkReplyComposer();
   updateCommentButtons();
+}
+
+function showArtworkReply(reviewId) {
+  if (!requireLogin('请先登录后再回复评价。')) return;
+  artworkReplyTarget = String(reviewId);
+  updateArtworkReplyComposer();
+  document.getElementById('commentText')?.focus();
+}
+
+function cancelArtworkReply() {
+  artworkReplyTarget = '';
+  updateArtworkReplyComposer();
+}
+
+function toggleArtworkReplies(reviewId) {
+  const key = String(reviewId);
+  if (expandedArtworkReplies.has(key)) expandedArtworkReplies.delete(key);
+  else expandedArtworkReplies.add(key);
+  renderArtworkComments(document.getElementById('commentCardId')?.value || '');
 }
 
 async function syncOpenArtworkComments() {
@@ -978,6 +1172,8 @@ function openArtworkDetail(cardOrId) {
   const card = typeof cardOrId === 'string' ? getGalleryCard(cardOrId) : cardOrId;
   const data = getCardData(card);
   if (!data) return;
+  finishArtworkDwell();
+  activeArtworkDwell = { id: String(data.id), startedAt: Date.now() };
   recordView('artwork', data.id);
   document.getElementById('detailTitle').textContent = data.name;
   document.getElementById('detailTag').textContent = data.tag;
@@ -987,17 +1183,26 @@ function openArtworkDetail(cardOrId) {
   document.getElementById('commentImageInput').value = '';
   document.getElementById('commentImageName').textContent = '';
   commentImageSrc = '';
+  artworkReplyTarget = '';
+  artworkReviewCache = [];
+  updateArtworkReplyComposer();
   renderArtworkComments(data.id);
   document.getElementById('artworkDetail').classList.remove('hidden');
+  document.body.classList.add('artwork-detail-open');
   startArtworkCommentSync();
 }
 
 function closeArtworkDetail() {
+  finishArtworkDwell();
   stopArtworkCommentSync();
   document.getElementById('artworkDetail').classList.add('hidden');
+  document.body.classList.remove('artwork-detail-open');
   document.getElementById('detailImage').removeAttribute('src');
   document.getElementById('commentCardId').value = '';
   commentImageSrc = '';
+  artworkReplyTarget = '';
+  artworkReviewCache = [];
+  updateArtworkReplyComposer();
 }
 
 async function submitArtworkComment() {
@@ -1011,6 +1216,7 @@ async function submitArtworkComment() {
       method: 'POST',
       body: JSON.stringify({
         artwork: cardId,
+        parent: artworkReplyTarget || null,
         rating: 5,
         content: text,
         image_data: commentImageSrc
@@ -1024,7 +1230,8 @@ async function submitArtworkComment() {
   document.getElementById('commentImageInput').value = '';
   document.getElementById('commentImageName').textContent = '';
   commentImageSrc = '';
-  renderArtworkComments(cardId);
+  artworkReplyTarget = '';
+  await renderArtworkComments(cardId);
 }
 
 async function toggleReviewLike(reviewId) {
@@ -1153,6 +1360,7 @@ function createGalleryCard(data) {
   card.dataset.reviewsCount = String(data.reviewsCount || data.reviews_count || 0);
   card.dataset.saved = String(data.saved === true);
   card.dataset.recommendationScore = String(data.recommendationScore || data.recommendation_score || 0);
+  card.dataset.recommendationReason = data.recommendationReason || data.recommendation_reason || '为你精选';
   const src = normalizeImageSrc(data.imageSrc || data.image_url || data.image || '');
   const imageHtml = src ? `<img src="${escapeHTML(src)}" alt="${escapeHTML(data.name)}">` : '';
   card.innerHTML = `
@@ -1165,6 +1373,7 @@ function createGalleryCard(data) {
     <div class="character-info">
       <h3 onclick="editName(this)">${escapeHTML(data.name)}</h3>
       <span class="character-tag" onclick="editTag(this)">${escapeHTML(data.tag)}</span>
+      <span class="recommendation-reason">${escapeHTML(card.dataset.recommendationReason)}</span>
       <button class="character-owner user-profile-link" type="button" data-user-profile="${escapeHTML(data.owner || 'admin')}">@${escapeHTML(data.owner || 'admin')}</button>
     </div>
   `;
@@ -1172,6 +1381,7 @@ function createGalleryCard(data) {
   normalizeCardActions();
   normalizeCommentButtons();
   applyCardPermissions();
+  observeGalleryCard(card);
   return card;
 }
 
@@ -1552,10 +1762,16 @@ async function loadGalleryFromApi() {
   try {
     galleryApiPage = 1;
     galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
-    const { items, hasMore } = await fetchRecommendedArtworkPage(galleryApiPage);
+    const [feedResult, guessResult] = await Promise.all([
+      fetchRecommendedArtworkPage(galleryApiPage, 'feed', GALLERY_API_PAGE_SIZE),
+      fetchRecommendedArtworkPage(1, 'guess', 8)
+    ]);
+    const { items, hasMore } = feedResult;
     const grid = document.getElementById('galleryGrid');
     grid.innerHTML = '';
     items.forEach(item => createGalleryCard(artworkToCardData(item)));
+    guessLikeItems = guessResult.items.slice(0, 8);
+    renderGuessYouLike(guessLikeItems);
     galleryApiHasMore = hasMore;
     galleryApiPage += 1;
     cardIdCounter = Math.max(10, ...items.map(item => Number(item.id)).filter(Boolean)) + 1;
@@ -1569,14 +1785,42 @@ async function loadGalleryFromApi() {
   }
 }
 
-async function fetchRecommendedArtworkPage(page = 1) {
-  const data = await apiRequest(`/artworks/recommendations/?page=${page}&page_size=${GALLERY_API_PAGE_SIZE}`, {
+function isArtworkDisliked(id) {
+  const bucket = getUserInteractionBucket();
+  return Boolean(bucket?.disliked?.includes(interactionKey('artwork', id)));
+}
+
+function renderGuessYouLike(items = []) {
+  const target = document.getElementById('guessLikeGrid');
+  if (!target) return;
+  const visibleItems = items.filter(item => !isArtworkDisliked(item.id));
+  target.innerHTML = visibleItems.length ? visibleItems.map(item => {
+    const artwork = item.name ? {
+      ...item,
+      recommendationReason: item.recommendationReason || '为你精选'
+    } : artworkToCardData(item);
+    const image = artwork.imageSrc
+      ? `<img src="${escapeHTML(artwork.imageSrc)}" alt="${escapeHTML(artwork.name)}">`
+      : '<span class="guess-like-placeholder" aria-hidden="true">🎨</span>';
+    return `
+      <button class="guess-like-card" type="button" data-guess-artwork="${escapeHTML(String(artwork.id))}">
+        <span class="guess-like-media">${image}<small>${escapeHTML(artwork.recommendationReason)}</small></span>
+        <span class="guess-like-body">
+          <strong>${escapeHTML(artwork.name)}</strong>
+          <span>${escapeHTML(artwork.tag)} · @${escapeHTML(artwork.owner)}</span>
+        </span>
+      </button>`;
+  }).join('') : '<div class="guess-like-empty">多浏览几个作品后，这里会生成更准确的猜你喜欢。</div>';
+}
+
+async function fetchRecommendedArtworkPage(page = 1, mode = 'feed', pageSize = GALLERY_API_PAGE_SIZE) {
+  const data = await apiRequest(`/artworks/recommendations/?page=${page}&page_size=${pageSize}`, {
     method: 'POST',
-    auth: false,
-    body: JSON.stringify(buildArtworkRecommendationPayload())
+    auth: Boolean(currentUser),
+    body: JSON.stringify(buildArtworkRecommendationPayload(mode))
   });
   return {
-    items: apiList(data),
+    items: apiList(data).filter(item => !isArtworkDisliked(item.id)),
     hasMore: !!data?.next
   };
 }
@@ -1614,6 +1858,8 @@ async function refreshGalleryRecommendations() {
   galleryApiHasMore = false;
   grid.innerHTML = '';
   items.forEach(item => createGalleryCard(item));
+  guessLikeItems = items.slice(0, 8);
+  renderGuessYouLike(guessLikeItems);
   renderGalleryPagination();
 }
 
@@ -1635,7 +1881,8 @@ function loadGallery() {
     galleryVisibleCount = GALLERY_ITEMS_PER_PAGE;
     galleryApiHasMore = false;
     const behaviorWeights = buildBehaviorTagWeights(galleryData);
-    sortGalleryDataByRecommendation(galleryData).forEach((data, index) => {
+    const sortedGalleryData = sortGalleryDataByRecommendation(galleryData);
+    sortedGalleryData.forEach((data, index) => {
       const card = document.createElement('div');
       card.className = 'character-card fade-in visible';
       card.dataset.id = String(data.id);
@@ -1658,11 +1905,15 @@ function loadGallery() {
         <div class="character-info">
           <h3 onclick="editName(this)">${escapeHTML(data.name)}</h3>
           <span class="character-tag" onclick="editTag(this)">${escapeHTML(data.tag)}</span>
+          <span class="recommendation-reason">${escapeHTML(data.recommendationReason || '为你精选')}</span>
           <button class="character-owner user-profile-link" type="button" data-user-profile="${escapeHTML(data.owner || 'admin')}">@${escapeHTML(data.owner || 'admin')}</button>
         </div>
       `;
       grid.appendChild(card);
+      observeGalleryCard(card);
     });
+    guessLikeItems = sortedGalleryData.slice(0, 8);
+    renderGuessYouLike(guessLikeItems);
     normalizeCardActions();
     normalizeCommentButtons();
     cardIdCounter = Math.max(10, ...galleryData.map(d => parseInt(d.id, 10)).filter(Boolean)) + 1;
@@ -2734,10 +2985,10 @@ renderInspirations = async function() {
         <span class="blog-tag">${escapeHTML(item.tag || '灵感')}</span>
       </div>
       <div class="interaction-strip inspiration-strip">
-        <span data-inspiration-stat="views">浏览 0</span>
-        <button type="button" data-inspiration-action="like" data-inspiration-stat="likes">赞 0</button>
-        <span data-inspiration-stat="comments">评 0</span>
-        <button type="button" data-inspiration-action="favorite" data-inspiration-stat="favorites">藏 0</button>
+        <span data-inspiration-stat="views" aria-label="浏览 0">${interactionIcon('views')}<span data-stat-count>0</span></span>
+        <button type="button" data-inspiration-action="like" data-inspiration-stat="likes" aria-label="点赞 0">${interactionIcon('like')}<span data-stat-count>0</span></button>
+        <span data-inspiration-stat="comments" aria-label="评论 0">${interactionIcon('comment')}<span data-stat-count>0</span></span>
+        <button type="button" data-inspiration-action="favorite" data-inspiration-stat="favorites" aria-label="收藏 0">${interactionIcon('favorite')}<span data-stat-count>0</span></button>
       </div>
     </article>
   `).join('') : '<div class="empty-state">暂无灵感日志</div>';
@@ -2760,14 +3011,14 @@ function renderInspirationInteractionDisplays() {
     const like = article.querySelector('[data-inspiration-stat="likes"]');
     const comment = article.querySelector('[data-inspiration-stat="comments"]');
     const favorite = article.querySelector('[data-inspiration-stat="favorites"]');
-    if (view) view.textContent = `浏览 ${counts.views}`;
+    setInteractionMetric(view, counts.views, '浏览');
     if (like) {
-      like.textContent = `赞 ${counts.likes}`;
+      setInteractionMetric(like, counts.likes, '点赞');
       like.classList.toggle('active', userHasInteraction('liked', 'inspiration', id));
     }
-    if (comment) comment.textContent = `评 ${counts.comments}`;
+    setInteractionMetric(comment, counts.comments, '评论');
     if (favorite) {
-      favorite.textContent = `藏 ${counts.favorites}`;
+      setInteractionMetric(favorite, counts.favorites, '收藏');
       favorite.classList.toggle('active', userHasInteraction('favorites', 'inspiration', id));
     }
   });
@@ -2815,7 +3066,7 @@ function renderInspirationCommentItem(item, isReply = false) {
         <button class="comment-author user-profile-link" type="button" data-user-profile="${escapeHTML(item.reviewer || '')}">${escapeHTML(name)}</button>
         <div class="comment-text">${escapeHTML(item.content)}</div>
         <div class="comment-time">${escapeHTML(item.createdAt)}</div>
-        <button class="comment-like${likedClass}" type="button" onclick="toggleInspirationCommentLike('${escapeHTML(item.id)}')">赞 ${item.likeCount}</button>
+        <button class="comment-like${likedClass}" type="button" onclick="toggleInspirationCommentLike('${escapeHTML(item.id)}')">${interactionIcon('like')}<span>赞 ${item.likeCount}</span></button>
         ${isReply ? '' : `<button class="comment-reply" type="button" onclick="showInspirationReply('${escapeHTML(item.id)}')">回复</button>`}
       </div>
       ${isReply ? '' : renderInspirationReplyForm(item.id)}
@@ -3088,10 +3339,10 @@ function insertMiniStats(actions, counts, comments) {
   if (!actions) return;
   actions.querySelectorAll('.mini-stat').forEach(item => item.remove());
   const html = `
-    <span class="mini-stat">浏览 ${counts.views}</span>
-    <span class="mini-stat">赞 ${counts.likes}</span>
-    <span class="mini-stat">评 ${comments}</span>
-    <span class="mini-stat">藏 ${counts.favorites}</span>
+    <span class="mini-stat" title="浏览">${interactionIcon('views')}<span>${counts.views}</span></span>
+    <span class="mini-stat" title="点赞">${interactionIcon('like')}<span>${counts.likes}</span></span>
+    <span class="mini-stat" title="评论">${interactionIcon('comment')}<span>${comments}</span></span>
+    <span class="mini-stat" title="收藏">${interactionIcon('favorite')}<span>${counts.favorites}</span></span>
   `;
   actions.insertAdjacentHTML('afterbegin', html);
 }
@@ -3531,7 +3782,55 @@ document.getElementById('navUserChip').addEventListener('click', () => {
 
 document.getElementById('navSearchForm')?.addEventListener('submit', event => {
   event.preventDefault();
+  setNavSearchRecommendations(false);
+  closeMobileSearch();
   performSearch(document.getElementById('navSearchInput')?.value || '');
+});
+
+function openMobileSearch() {
+  const wrap = document.getElementById('navSearchWrap');
+  const input = document.getElementById('navSearchInput');
+  if (!wrap || !input) return;
+  wrap.classList.add('mobile-search-open');
+  document.body.classList.add('mobile-search-active');
+  setNavSearchRecommendations(!input.value.trim());
+  window.requestAnimationFrame(() => input.focus());
+}
+
+function closeMobileSearch() {
+  document.getElementById('navSearchWrap')?.classList.remove('mobile-search-open');
+  document.body.classList.remove('mobile-search-active');
+  setNavSearchRecommendations(false);
+}
+
+document.getElementById('mobileSearchBtn')?.addEventListener('click', openMobileSearch);
+document.getElementById('mobileSearchCloseBtn')?.addEventListener('click', closeMobileSearch);
+
+function setNavSearchRecommendations(visible) {
+  const panel = document.getElementById('navSearchRecommendations');
+  const input = document.getElementById('navSearchInput');
+  if (!panel || !input) return;
+  panel.hidden = !visible;
+  input.setAttribute('aria-expanded', String(visible));
+}
+
+document.getElementById('navSearchInput')?.addEventListener('focus', event => {
+  if (!event.currentTarget.value.trim()) setNavSearchRecommendations(true);
+});
+
+document.getElementById('navSearchInput')?.addEventListener('input', event => {
+  setNavSearchRecommendations(!event.currentTarget.value.trim());
+});
+
+document.getElementById('navSearchInput')?.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    closeMobileSearch();
+    event.currentTarget.blur();
+  }
+});
+
+document.addEventListener('pointerdown', event => {
+  if (!event.target.closest('#navSearchWrap')) setNavSearchRecommendations(false);
 });
 
 document.getElementById('searchPageForm')?.addEventListener('submit', event => {
@@ -4494,6 +4793,8 @@ document.getElementById('commentForm').addEventListener('submit', event => {
   submitArtworkComment();
 });
 
+document.getElementById('cancelArtworkReplyBtn')?.addEventListener('click', cancelArtworkReply);
+
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     closeImagePreview();
@@ -5061,6 +5362,8 @@ let messageRefreshPromise = null;
 let messageThreadRefreshPromise = null;
 let messageSessionUsername = '';
 let messagePollTimer = null;
+let messageThreadLoading = false;
+let activeMessageRequestController = null;
 
 function normalizeDirectMessage(item = {}) {
   const senderUsername = item.sender_username || item.senderUsername || '';
@@ -5118,8 +5421,9 @@ function renderConversationList() {
       const preview = item.lastMessage.body || '开始一段对话';
       const prefix = item.lastMessage.isMine ? '我：' : '';
       const active = activeMessageUser && item.user.username === activeMessageUser.username;
+      const loading = active && messageThreadLoading;
       return `
-        <button class="conversation-item${active ? ' active' : ''}" type="button" data-conversation-user="${escapeHTML(item.user.username)}">
+        <button class="conversation-item${active ? ' active' : ''}${loading ? ' is-loading' : ''}" type="button" data-conversation-user="${escapeHTML(item.user.username)}"${active ? ' aria-current="true"' : ''}${loading ? ' aria-busy="true"' : ''}>
           <span class="conversation-person">
             ${socialAvatarHtml(item.user, 'message-avatar')}
             <span>
@@ -5204,6 +5508,9 @@ function renderMessageThread({ preserveScroll = false, scrollToBottom = false } 
 }
 
 function resetMessagingState() {
+  activeMessageRequestController?.abort();
+  activeMessageRequestController = null;
+  messageThreadLoading = false;
   messageConversations = [];
   activeMessageUser = null;
   activeMessageItems = [];
@@ -5320,6 +5627,10 @@ async function loadMessageThread(identifier, page = 1, prepend = false, userHint
   const token = ++messageThreadToken;
   const normalizedPage = Math.max(1, Number(page) || 1);
   const knownConversation = messageConversations.find(item => item.user.username === username);
+  activeMessageRequestController?.abort();
+  const requestController = new AbortController();
+  activeMessageRequestController = requestController;
+  messageThreadLoading = true;
 
   if (normalizedPage === 1) {
     if (activeMessageUser?.username !== username) {
@@ -5337,7 +5648,10 @@ async function loadMessageThread(identifier, page = 1, prepend = false, userHint
     activeMessageLimit = knownConversation?.messageLimit || 3;
     renderMessageThread();
     const history = document.getElementById('messageHistory');
-    if (history) history.innerHTML = '<div class="message-empty">正在加载消息...</div>';
+    if (history) {
+      history.setAttribute('aria-busy', 'true');
+      history.innerHTML = '<div class="message-empty message-thread-loading">正在加载消息...</div>';
+    }
   } else {
     const olderButton = document.getElementById('loadOlderMessagesBtn');
     if (olderButton) {
@@ -5347,7 +5661,9 @@ async function loadMessageThread(identifier, page = 1, prepend = false, userHint
   }
 
   try {
-    const data = await apiRequest(`/users/messages/${encodeURIComponent(username)}/?page=${normalizedPage}&page_size=50`);
+    const data = await apiRequest(`/users/messages/${encodeURIComponent(username)}/?page=${normalizedPage}&page_size=50`, {
+      signal: requestController.signal
+    });
     if (token !== messageThreadToken || currentUser?.username !== messageSessionUsername) return;
     const responseUser = normalizePublicUser(data?.user || { username });
     activeMessageUser = activeMessageUser
@@ -5364,13 +5680,22 @@ async function loadMessageThread(identifier, page = 1, prepend = false, userHint
     activeMessageLimit = Number(data?.message_limit || 3);
     renderMessageThread({ preserveScroll: prepend, scrollToBottom: !prepend });
     if (normalizedPage === 1) void markActiveConversationRead(username, token);
+    return true;
   } catch (error) {
+    if (error?.name === 'AbortError') return false;
     if (token !== messageThreadToken) return;
     const history = document.getElementById('messageHistory');
     if (history) {
       history.innerHTML = `<div class="message-empty"><strong>消息加载失败</strong><span>${escapeHTML(error.message || '请稍后重试。')}</span></div>`;
     }
+    return false;
   } finally {
+    if (activeMessageRequestController === requestController) {
+      activeMessageRequestController = null;
+      messageThreadLoading = false;
+      document.getElementById('messageHistory')?.removeAttribute('aria-busy');
+      renderConversationList();
+    }
     if (token === messageThreadToken) {
       const olderButton = document.getElementById('loadOlderMessagesBtn');
       if (olderButton) {
@@ -5442,7 +5767,7 @@ async function sendDirectMessage(event) {
 }
 
 async function refreshActiveMessageThread() {
-  if (messageThreadRefreshPromise || !currentUser || !activeMessageUser || getActivePageId() !== 'messages') {
+  if (messageThreadLoading || messageThreadRefreshPromise || !currentUser || !activeMessageUser || getActivePageId() !== 'messages') {
     return messageThreadRefreshPromise;
   }
   const sessionUsername = currentUser.username;
@@ -5510,18 +5835,61 @@ document.getElementById('messageBody')?.addEventListener('keydown', event => {
     document.getElementById('messageComposer')?.requestSubmit();
   }
 });
+document.getElementById('messageBody')?.addEventListener('input', event => {
+  const input = event.currentTarget;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 112)}px`;
+});
+document.getElementById('chatProfileBtn')?.addEventListener('click', () => {
+  if (activeMessageUser?.username) openUserProfile(activeMessageUser.username);
+});
 document.getElementById('loadOlderMessagesBtn')?.addEventListener('click', loadOlderMessages);
 document.getElementById('chatBackBtn')?.addEventListener('click', () => {
   document.querySelector('.message-shell')?.classList.remove('chat-open');
 });
+document.getElementById('messagePageBackBtn')?.addEventListener('click', () => switchPage('home'));
 document.getElementById('conversationList')?.addEventListener('click', event => {
   const item = event.target.closest('[data-conversation-user]');
-  if (item) loadMessageThread(item.dataset.conversationUser);
+  if (!item) return;
+  event.preventDefault();
+  loadMessageThread(item.dataset.conversationUser, 1, false).catch(error => {
+    console.warn('Unable to open conversation:', error);
+  });
+});
+
+document.getElementById('guessLikeGrid')?.addEventListener('click', event => {
+  const preview = event.target.closest('[data-guess-artwork]');
+  if (!preview) return;
+  let artwork = getGalleryCard(preview.dataset.guessArtwork);
+  if (!artwork) {
+    const source = guessLikeItems.find(item => String(item.id) === preview.dataset.guessArtwork);
+    if (source) artwork = createGalleryCard(source.name ? source : artworkToCardData(source));
+  }
+  if (artwork) {
+    setNavSearchRecommendations(false);
+    openArtworkDetail(artwork);
+  }
+});
+
+document.getElementById('refreshRecommendationsBtn')?.addEventListener('click', async event => {
+  const button = event.currentTarget;
+  if (button.disabled) return;
+  button.disabled = true;
+  button.classList.add('is-loading');
+  getRecommendationSeed(true);
+  sessionArtworkImpressions.clear();
+  try {
+    await refreshGalleryRecommendations();
+  } finally {
+    button.disabled = false;
+    button.classList.remove('is-loading');
+  }
 });
 
 const directMessageSwitchPage = switchPage;
 switchPage = function(pageId) {
   const result = directMessageSwitchPage(pageId);
+  document.body.classList.toggle('messages-page-open', pageId === 'messages');
   if (pageId === 'messages' && currentUser) {
     ensureMessageSession();
     startMessagePolling();

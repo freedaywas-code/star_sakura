@@ -1,7 +1,9 @@
+import hashlib
 import math
 import re
 
 from django.db.models import Count
+from django.utils import timezone
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -48,15 +50,8 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
     def recommendations(self, request):
         payload = self._recommendation_payload(request)
         artworks = list(self.filter_queryset(self.get_queryset()))
-        scores, matched_tags = self._score_artworks(artworks, payload)
-        artworks.sort(
-            key=lambda artwork: (
-                scores.get(str(artwork.id), 0),
-                artwork.created_at.timestamp() if artwork.created_at else 0,
-                artwork.id,
-            ),
-            reverse=True,
-        )
+        scores, matched_tags, recommendation_meta = self._score_artworks(artworks, payload)
+        artworks = self._diversity_rerank(artworks, scores)
 
         page = self.paginate_queryset(artworks)
         items = page if page is not None else artworks
@@ -65,6 +60,7 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
             key = str(item["id"])
             item["recommendation_score"] = round(scores.get(key, 0), 3)
             item["matched_tags"] = sorted(matched_tags.get(key, set()))
+            item.update(recommendation_meta.get(key, {}))
 
         if page is not None:
             return self.get_paginated_response(data)
@@ -83,7 +79,12 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
             "likes": self._count_map(source.get("likes")),
             "favorites": self._count_map(source.get("favorites")),
             "comments": self._count_map(source.get("comments")),
+            "impressions": self._count_map(source.get("impressions")),
+            "dwell": self._count_map(source.get("dwell")),
             "history": self._history_list(source.get("history")),
+            "dislikes": set(self._history_list(source.get("dislikes"))),
+            "seed": str(source.get("seed") or getattr(request.user, "username", "") or "anonymous")[:80],
+            "mode": "guess" if source.get("mode") == "guess" else "feed",
         }
 
     def _tag_list(self, value):
@@ -126,7 +127,7 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
         return counts
 
     def _history_list(self, value):
-        if not isinstance(value, (list, tuple)):
+        if not isinstance(value, (list, tuple, set)):
             return []
         history = []
         for item in value:
@@ -157,6 +158,7 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
         explicit_weights = {tag: max(1, len(explicit_tags) - index) for index, tag in enumerate(explicit_tags)}
         by_id = {str(artwork.id): artwork for artwork in artworks}
         behavior_weights = {}
+        negative_weights = {}
 
         for artwork_id, count in payload["views"].items():
             self._add_behavior_weight(by_id.get(artwork_id), min(count, 8) * 1.0, behavior_weights)
@@ -164,17 +166,21 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
             self._add_behavior_weight(by_id.get(artwork_id), min(count, 3) * 4.0, behavior_weights)
         for artwork_id, count in payload["favorites"].items():
             self._add_behavior_weight(by_id.get(artwork_id), min(count, 3) * 6.0, behavior_weights)
+        for artwork_id, seconds in payload["dwell"].items():
+            self._add_behavior_weight(
+                by_id.get(artwork_id), min(math.log1p(seconds) * 1.6, 10), behavior_weights
+            )
         for index, artwork_id in enumerate(payload["history"]):
             self._add_behavior_weight(by_id.get(artwork_id), max(0.5, 3.0 - index * 0.08), behavior_weights)
+        for artwork_id in payload["dislikes"]:
+            self._add_behavior_weight(by_id.get(artwork_id), 8.0, negative_weights)
 
         scores = {}
         matched_tags = {}
-        direct_counts = {
-            "views": payload["views"],
-            "likes": payload["likes"],
-            "favorites": payload["favorites"],
-            "comments": payload["comments"],
-        }
+        recommendation_meta = {}
+        now = timezone.now()
+        has_preference = bool(explicit_weights or behavior_weights)
+        exploration_boost = 4.8 if payload["mode"] == "guess" else 3.2
 
         for artwork in artworks:
             key = str(artwork.id)
@@ -200,18 +206,102 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
                     score += 1.5 * math.log1p(weight)
                     matches.add(tag)
 
-            score += math.log1p(direct_counts["views"].get(key, 0)) * 0.7
-            score += math.log1p(direct_counts["likes"].get(key, 0)) * 2.2
-            score += math.log1p(direct_counts["favorites"].get(key, 0)) * 3.0
-            score += math.log1p(direct_counts["comments"].get(key, 0)) * 1.4
+            for tag, weight in negative_weights.items():
+                if tag in tag_set:
+                    score -= 7 * math.log1p(weight)
+                elif tag and tag in text:
+                    score -= 2 * math.log1p(weight)
+
+            views = payload["views"].get(key, 0)
+            likes = payload["likes"].get(key, 0)
+            favorites = payload["favorites"].get(key, 0)
+            impressions = payload["impressions"].get(key, 0)
+            dwell = payload["dwell"].get(key, 0)
+            score += math.log1p(views) * 0.7
+            score += math.log1p(likes) * 2.2
+            score += math.log1p(favorites) * 3.0
+            score += math.log1p(payload["comments"].get(key, 0)) * 1.4
+            score += min(math.log1p(dwell) * 0.65, 3.8)
             score += math.log1p(getattr(artwork, "reviews_total", 0) or 0) * 1.2
+            if impressions > 1 and not (likes or favorites):
+                score -= math.log1p(impressions - 1) * 1.35
+            if views > 3 and not (likes or favorites):
+                score -= math.log1p(views - 2) * 0.9
+            if key in payload["dislikes"]:
+                score -= 1000
+
+            age_days = 365.0
             if artwork.created_at:
-                score += artwork.created_at.timestamp() / 10_000_000_000
+                age_days = max(0, (now - artwork.created_at).total_seconds() / 86400)
+                score += 5.5 * math.exp(-age_days / 28)
+
+            explore_value = self._stable_unit_interval(payload["seed"], payload["mode"], key)
+            is_exploration = not matches and explore_value > 0.72
+            score += explore_value * exploration_boost
+            if not has_preference:
+                score += explore_value * 2.2
 
             scores[key] = score
             matched_tags[key] = matches
+            if matches:
+                reason = f"因为你喜欢 {' · '.join(sorted(matches)[:2])}"
+            elif age_days <= 14:
+                reason = "近期新作"
+            elif getattr(artwork, "reviews_total", 0):
+                reason = "大家正在关注"
+            elif is_exploration:
+                reason = "探索一种新风格"
+            else:
+                reason = "为你精选"
+            recommendation_meta[key] = {
+                "recommendation_reason": reason,
+                "is_exploration": is_exploration,
+            }
 
-        return scores, matched_tags
+        return scores, matched_tags, recommendation_meta
+
+    def _diversity_rerank(self, artworks, scores):
+        """Keep relevance while preventing one author or category dominating the feed."""
+        remaining = sorted(
+            artworks,
+            key=lambda artwork: (
+                scores.get(str(artwork.id), 0),
+                artwork.created_at.timestamp() if artwork.created_at else 0,
+                artwork.id,
+            ),
+            reverse=True,
+        )
+        selected = []
+        owner_counts = {}
+        category_counts = {}
+        recent_tags = []
+        while remaining:
+            best_index = 0
+            best_value = float("-inf")
+            for index, artwork in enumerate(remaining):
+                owner = str(artwork.owner_id)
+                category = (artwork.category or "").strip().lower()
+                overlap = len(set(self._artwork_tags(artwork)).intersection(recent_tags[-6:]))
+                penalty = owner_counts.get(owner, 0) * 1.8
+                penalty += category_counts.get(category, 0) * 1.25 if category else 0
+                penalty += overlap * 0.7
+                value = scores.get(str(artwork.id), 0) - penalty
+                if value > best_value:
+                    best_value = value
+                    best_index = index
+            artwork = remaining.pop(best_index)
+            selected.append(artwork)
+            owner = str(artwork.owner_id)
+            category = (artwork.category or "").strip().lower()
+            owner_counts[owner] = owner_counts.get(owner, 0) + 1
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + 1
+            recent_tags.extend(self._artwork_tags(artwork))
+        return selected
+
+    def _stable_unit_interval(self, *parts):
+        digest = hashlib.sha256(":".join(map(str, parts)).encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") / float(2**64 - 1)
 
     def _add_behavior_weight(self, artwork, weight, behavior_weights):
         if not artwork or weight <= 0:

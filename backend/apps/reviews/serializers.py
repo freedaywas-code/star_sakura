@@ -9,6 +9,7 @@ class ReviewSerializer(serializers.ModelSerializer):
     artwork_title = serializers.CharField(source="artwork.title", read_only=True)
     reviewer_username = serializers.CharField(source="reviewer.username", read_only=True)
     target_username = serializers.CharField(source="target_user.username", read_only=True)
+    parent_reviewer_username = serializers.CharField(source="parent.reviewer.username", read_only=True, default="")
     image_data = serializers.CharField(write_only=True, required=False, allow_blank=True)
     image_url = serializers.SerializerMethodField()
     liked_by = serializers.SerializerMethodField()
@@ -21,6 +22,8 @@ class ReviewSerializer(serializers.ModelSerializer):
             "order",
             "artwork",
             "artwork_title",
+            "parent",
+            "parent_reviewer_username",
             "reviewer",
             "reviewer_username",
             "target_user",
@@ -40,6 +43,7 @@ class ReviewSerializer(serializers.ModelSerializer):
             "id",
             "reviewer",
             "reviewer_username",
+            "parent_reviewer_username",
             "target_user",
             "target_username",
             "image_url",
@@ -92,8 +96,17 @@ class ReviewSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         order = attrs.get("order")
         artwork = attrs.get("artwork")
+        parent = attrs.get("parent")
         if order and artwork and order.artwork_id != artwork.id:
             raise serializers.ValidationError("评价的订单和画作不匹配")
         if order and not artwork:
             attrs["artwork"] = order.artwork
+            artwork = order.artwork
+        if parent and not artwork:
+            attrs["artwork"] = parent.artwork
+            artwork = parent.artwork
+        if parent and artwork and parent.artwork_id != artwork.id:
+            raise serializers.ValidationError("回复必须属于同一个作品")
+        if parent and parent.parent_id:
+            raise serializers.ValidationError("作品评价回复最多支持 2 层")
         return attrs
