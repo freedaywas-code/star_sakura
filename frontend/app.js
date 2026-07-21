@@ -2824,7 +2824,7 @@ handleLogin = async function(username, password) {
     refreshAuthUI();
     await refreshCommissions();
     await renderInspirations();
-    switchPage('me');
+    if (!resumePendingAISearch()) switchPage('me');
   } catch (error) {
     setAuthMessage(error.message || '用户名或密码不正确。');
   }
@@ -3650,7 +3650,13 @@ function renderSearchPage() {
   summary.textContent = `找到 ${searchResultCount()} 条相关内容`;
   results.innerHTML = visibleResults.length
     ? visibleResults.map(renderSearchCard).join('')
-    : '<div class="search-empty">没有找到相关内容，换个关键词试试。</div>';
+    : `<div class="search-empty search-empty-with-ai">
+        <strong>当前未搜索到相关内容</strong>
+        <span>可以换个关键词，或让 AI 助手继续为你检索。</span>
+        <button type="button" class="search-ai-action" data-search-ai>
+          <span aria-hidden="true">✦</span> 点击使用 AI 助手进行相关搜索
+        </button>
+      </div>`;
 }
 
 async function performSearch(query) {
@@ -3850,6 +3856,11 @@ document.getElementById('searchTabs')?.addEventListener('click', event => {
 });
 
 document.getElementById('searchResults')?.addEventListener('click', event => {
+  const aiButton = event.target.closest('[data-search-ai]');
+  if (aiButton) {
+    openAIAssistantWithPrompt(`帮我搜索“${searchState.query}”相关内容`);
+    return;
+  }
   const card = event.target.closest('[data-search-result-type]');
   if (!card) return;
   openSearchResult(card.dataset.searchResultType, card.dataset.searchResultId);
@@ -5866,7 +5877,7 @@ document.getElementById('guessLikeGrid')?.addEventListener('click', event => {
     if (source) artwork = createGalleryCard(source.name ? source : artworkToCardData(source));
   }
   if (artwork) {
-    setNavSearchRecommendations(false);
+    closeMobileSearch();
     openArtworkDetail(artwork);
   }
 });
@@ -5957,6 +5968,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 // AI creation assistant (OpenAI-compatible API through the Django backend).
 const AI_CONFIG_KEY = 'starSakuraAiConfig';
 const AI_CHATS_KEY = 'starSakuraAiChats';
+const AI_PENDING_SEARCH_KEY = 'starSakuraPendingAiSearch';
 const AI_GREETING = '你好！我是星漫 AI 创作助手。可以陪你聊天、推荐站内画师/作品/委托，也能一起构思创作灵感。';
 let aiHistory = [];
 let aiBusy = false;
@@ -5965,6 +5977,7 @@ let aiActiveChatId = '';
 let aiChatStorageOwner = '';
 let aiImageData = '';
 let aiImageName = '';
+let aiMessageContextMenu = null;
 
 function getAIConfig() {
   try { return JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || '{}'); } catch { return {}; }
@@ -5977,6 +5990,20 @@ function getAIChatStorageKey() {
 function createAIChat() {
   const now = Date.now();
   return { id: `chat-${now}-${Math.random().toString(36).slice(2, 7)}`, title: '新对话', messages: [], updatedAt: now };
+}
+
+function createAIMessageId() {
+  return `message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeAIChat(chat = {}) {
+  return {
+    ...chat,
+    messages: (Array.isArray(chat.messages) ? chat.messages : []).map(message => ({
+      ...message,
+      id: message.id || createAIMessageId()
+    }))
+  };
 }
 
 function saveAIChats() {
@@ -6033,7 +6060,7 @@ function renderActiveAIChat() {
     addAIMessage('assistant', AI_GREETING);
   } else {
     chat.messages.forEach(entry => {
-      addAIMessage(entry.role, entry.content);
+      addAIMessage(entry.role, entry.content, '', entry.id);
       if (entry.role === 'user' && entry.hasImage) addAIImageMarker(entry.imageName || '已上传作品图片');
       if (entry.role === 'assistant') {
         addAIRecommendations(entry.recommendations || []);
@@ -6051,7 +6078,7 @@ function ensureAIChatState(force = false) {
   aiChatStorageOwner = owner;
   try {
     const stored = currentUser ? JSON.parse(localStorage.getItem(getAIChatStorageKey()) || '[]') : [];
-    aiChats = Array.isArray(stored) ? stored : [];
+    aiChats = Array.isArray(stored) ? stored.map(normalizeAIChat) : [];
   } catch {
     aiChats = [];
   }
@@ -6089,15 +6116,136 @@ function deleteAIChat(chatId) {
   renderActiveAIChat();
 }
 
-function addAIMessage(role, content, extraClass = '') {
+function attachAIMessageActions(messageElement, messageId) {
+  if (!messageElement || !messageId || messageElement.querySelector('.ai-message-actions')) return;
+  messageElement.dataset.aiMessageId = messageId;
+  const actions = document.createElement('div');
+  actions.className = 'ai-message-actions';
+  actions.setAttribute('aria-label', '消息操作');
+  actions.innerHTML = `
+    <button type="button" data-ai-message-action="edit" title="修改这句" aria-label="修改这句">✎</button>
+    <button type="button" data-ai-message-action="delete" title="删除这句" aria-label="删除这句">⌫</button>
+  `;
+  messageElement.appendChild(actions);
+}
+
+function addAIMessage(role, content, extraClass = '', messageId = '') {
   const list = document.getElementById('aiMessages');
   if (!list) return null;
+  const message = document.createElement('div');
+  message.className = `ai-message ${role} ${extraClass}`.trim();
   const bubble = document.createElement('div');
-  bubble.className = `ai-message ${role} ${extraClass}`.trim();
+  bubble.className = `ai-message-bubble ${extraClass}`.trim();
   bubble.textContent = content;
-  list.appendChild(bubble);
+  message.appendChild(bubble);
+  attachAIMessageActions(message, messageId);
+  list.appendChild(message);
   list.scrollTop = list.scrollHeight;
   return bubble;
+}
+
+function findAIMessage(messageId) {
+  const chat = getActiveAIChat();
+  const index = chat?.messages?.findIndex(message => message.id === messageId) ?? -1;
+  return { chat, index, message: index >= 0 ? chat.messages[index] : null };
+}
+
+function refreshAIChatAfterMessageChange(chat) {
+  if (!chat) return;
+  const firstUserMessage = chat.messages.find(message => message.role === 'user');
+  chat.title = firstUserMessage?.content?.replace(/\s+/g, ' ').slice(0, 24) || '新对话';
+  chat.updatedAt = Date.now();
+  aiHistory = chat.messages.map(({ role, content }) => ({ role, content })).slice(-12);
+  saveAIChats();
+  renderActiveAIChat();
+}
+
+function closeAIMessageContextMenu() {
+  aiMessageContextMenu?.remove();
+  aiMessageContextMenu = null;
+}
+
+function showAIMessageContextMenu(messageId, clientX, clientY) {
+  if (aiBusy || !findAIMessage(messageId).message) return;
+  closeAIMessageContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ai-message-context-menu';
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = `
+    <button type="button" role="menuitem" data-ai-context-action="edit"><span aria-hidden="true">✎</span> 修改这句</button>
+    <button type="button" role="menuitem" data-ai-context-action="delete"><span aria-hidden="true">⌫</span> 删除这句</button>
+  `;
+  document.body.appendChild(menu);
+  const width = 150;
+  const height = 92;
+  menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - height - 8))}px`;
+  menu.addEventListener('click', event => {
+    const action = event.target.closest('[data-ai-context-action]')?.dataset.aiContextAction;
+    if (action === 'edit') startAIMessageEdit(messageId);
+    if (action === 'delete') deleteAIMessage(messageId);
+  });
+  aiMessageContextMenu = menu;
+  menu.querySelector('button')?.focus();
+}
+
+function startAIMessageEdit(messageId) {
+  closeAIMessageContextMenu();
+  if (aiBusy) return;
+  const { message } = findAIMessage(messageId);
+  const row = Array.from(document.querySelectorAll('#aiMessages [data-ai-message-id]'))
+    .find(element => element.dataset.aiMessageId === messageId);
+  if (!message || !row || row.classList.contains('is-editing')) return;
+  row.classList.add('is-editing');
+  const bubble = row.querySelector('.ai-message-bubble');
+  const actions = row.querySelector('.ai-message-actions');
+  if (bubble) bubble.hidden = true;
+  if (actions) actions.hidden = true;
+  const form = document.createElement('form');
+  form.className = 'ai-message-editor';
+  form.innerHTML = `
+    <textarea maxlength="4000" aria-label="修改消息内容"></textarea>
+    <div>
+      <button type="button" data-ai-edit-cancel>取消</button>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  `;
+  const textarea = form.querySelector('textarea');
+  textarea.value = message.content || '';
+  const cancel = () => {
+    form.remove();
+    row.classList.remove('is-editing');
+    if (bubble) bubble.hidden = false;
+    if (actions) actions.hidden = false;
+  };
+  form.querySelector('[data-ai-edit-cancel]').addEventListener('click', cancel);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const nextContent = textarea.value.trim();
+    if (!nextContent) {
+      textarea.setCustomValidity('消息内容不能为空');
+      textarea.reportValidity();
+      return;
+    }
+    const record = findAIMessage(messageId);
+    if (!record.message) return;
+    record.message.content = nextContent;
+    record.message.editedAt = Date.now();
+    refreshAIChatAfterMessageChange(record.chat);
+  });
+  row.appendChild(form);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+function deleteAIMessage(messageId) {
+  closeAIMessageContextMenu();
+  if (aiBusy) return;
+  const { chat, index } = findAIMessage(messageId);
+  if (!chat || index < 0) return;
+  if (!window.confirm('确定删除这句对话吗？')) return;
+  chat.messages.splice(index, 1);
+  refreshAIChatAfterMessageChange(chat);
 }
 
 function addAIRecommendations(items = []) {
@@ -6238,6 +6386,36 @@ function openAIAssistant() {
   document.getElementById('aiInput')?.focus();
 }
 
+function deliverPendingAISearch() {
+  const prompt = sessionStorage.getItem(AI_PENDING_SEARCH_KEY) || '';
+  if (!prompt || !currentUser) return;
+  if (aiBusy) {
+    window.setTimeout(deliverPendingAISearch, 250);
+    return;
+  }
+  sessionStorage.removeItem(AI_PENDING_SEARCH_KEY);
+  sendAIMessage(prompt);
+}
+
+function openAIAssistantWithPrompt(prompt) {
+  const message = String(prompt || '').trim();
+  if (!message) return;
+  sessionStorage.setItem(AI_PENDING_SEARCH_KEY, message);
+  if (!currentUser) {
+    openAuth('login', '登录后会进入 AI 助手，并自动发送刚才的搜索内容。');
+    return;
+  }
+  openAIAssistant();
+  window.setTimeout(deliverPendingAISearch, 0);
+}
+
+function resumePendingAISearch() {
+  if (!currentUser || !sessionStorage.getItem(AI_PENDING_SEARCH_KEY)) return false;
+  openAIAssistant();
+  window.setTimeout(deliverPendingAISearch, 0);
+  return true;
+}
+
 async function sendAIMessage(text) {
   const message = String(text || '').trim() || (aiImageData ? '请详细鉴赏这幅作品，并介绍它可能关联的画风、技法与艺术史知识。' : '');
   if (!message || aiBusy) return;
@@ -6257,9 +6435,16 @@ async function sendAIMessage(text) {
   const send = document.getElementById('aiSendBtn');
   if (input) input.value = '';
   if (send) send.disabled = true;
-  addAIMessage('user', message);
+  const userEntry = {
+    id: createAIMessageId(),
+    role: 'user',
+    content: message,
+    hasImage: !!imageData,
+    imageName
+  };
+  addAIMessage('user', message, '', userEntry.id);
   if (imageData) addAIImageMarker(imageName, imageData);
-  chat.messages.push({ role: 'user', content: message, hasImage: !!imageData, imageName });
+  chat.messages.push(userEntry);
   if (chat.title === '新对话') chat.title = message.replace(/\s+/g, ' ').slice(0, 24) || '新对话';
   chat.updatedAt = Date.now();
   saveAIChats();
@@ -6276,14 +6461,18 @@ async function sendAIMessage(text) {
     const answer = String(data?.message || '暂时没有生成内容，请再试一次。');
     if (loading) loading.textContent = answer;
     loading?.classList.remove('loading');
+    loading?.closest('.ai-message')?.classList.remove('loading');
     addAIRecommendations(data?.recommendations);
     addAISources(data?.sources || [], data?.web_search_used);
-    chat.messages.push({
+    const assistantEntry = {
+      id: createAIMessageId(),
       role: 'assistant', content: answer,
       recommendations: data?.recommendations || [],
       sources: data?.sources || [],
       webSearchUsed: !!data?.web_search_used
-    });
+    };
+    chat.messages.push(assistantEntry);
+    attachAIMessageActions(loading?.closest('.ai-message'), assistantEntry.id);
     chat.updatedAt = Date.now();
     aiHistory = chat.messages.map(({ role, content }) => ({ role, content })).slice(-12);
     saveAIChats();
@@ -6293,7 +6482,10 @@ async function sendAIMessage(text) {
     const errorMessage = error.message || 'AI 服务暂时不可用，请检查配置后重试。';
     if (loading) loading.textContent = errorMessage;
     loading?.classList.remove('loading');
-    chat.messages.push({ role: 'assistant', content: errorMessage });
+    loading?.closest('.ai-message')?.classList.remove('loading');
+    const errorEntry = { id: createAIMessageId(), role: 'assistant', content: errorMessage };
+    chat.messages.push(errorEntry);
+    attachAIMessageActions(loading?.closest('.ai-message'), errorEntry.id);
     chat.updatedAt = Date.now();
     aiHistory = chat.messages.map(({ role, content }) => ({ role, content })).slice(-12);
     saveAIChats();
@@ -6341,9 +6533,30 @@ document.getElementById('aiInput')?.addEventListener('keydown', event => {
   }
 });
 document.getElementById('aiMessages')?.addEventListener('click', event => {
+  const actionButton = event.target.closest('[data-ai-message-action]');
+  if (actionButton) {
+    const messageId = actionButton.closest('[data-ai-message-id]')?.dataset.aiMessageId;
+    if (actionButton.dataset.aiMessageAction === 'edit') startAIMessageEdit(messageId);
+    if (actionButton.dataset.aiMessageAction === 'delete') deleteAIMessage(messageId);
+    return;
+  }
   const card = event.target.closest('[data-ai-reference-type]');
   if (card) openAIReference(card.dataset.aiReferenceType, card.dataset.aiReferenceId, card.dataset.aiReferenceUsername);
 });
+document.getElementById('aiMessages')?.addEventListener('contextmenu', event => {
+  const message = event.target.closest('[data-ai-message-id]');
+  if (!message) return;
+  event.preventDefault();
+  showAIMessageContextMenu(message.dataset.aiMessageId, event.clientX, event.clientY);
+});
+document.addEventListener('pointerdown', event => {
+  if (!event.target.closest('.ai-message-context-menu')) closeAIMessageContextMenu();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeAIMessageContextMenu();
+});
+window.addEventListener('resize', closeAIMessageContextMenu);
+window.addEventListener('scroll', closeAIMessageContextMenu, true);
 document.getElementById('aiImageButton')?.addEventListener('click', () => document.getElementById('aiImageInput')?.click());
 document.getElementById('aiImageInput')?.addEventListener('change', event => selectAIImage(event.target.files?.[0]));
 document.getElementById('aiRemoveImageBtn')?.addEventListener('click', clearAIImage);

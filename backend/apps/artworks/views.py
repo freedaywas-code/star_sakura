@@ -50,6 +50,13 @@ class ArtworkViewSet(CachedPublicReadMixin, ApiResponseMixin, viewsets.ModelView
     def recommendations(self, request):
         payload = self._recommendation_payload(request)
         artworks = list(self.filter_queryset(self.get_queryset()))
+        # A dislike is an explicit opt-out, not merely a weak negative signal.
+        # Filter it before pagination so clients never receive empty/short pages
+        # after applying the same preference locally.
+        artworks = [
+            artwork for artwork in artworks
+            if str(artwork.id) not in payload["dislikes"]
+        ]
         scores, matched_tags, recommendation_meta = self._score_artworks(artworks, payload)
         artworks = self._diversity_rerank(artworks, scores)
 

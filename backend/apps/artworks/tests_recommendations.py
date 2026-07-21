@@ -53,7 +53,7 @@ class ArtworkRecommendationTests(APITestCase):
         self.assertTrue(results[0]["recommendation_reason"].startswith("因为你喜欢"))
         self.assertIn("is_exploration", results[0])
 
-    def test_dislike_and_repeated_exposure_reduce_rank(self):
+    def test_dislike_filters_item_and_repeated_exposure_reduces_rank(self):
         results = self.results({
             "tags": ["水彩"],
             "impressions": {str(self.watercolor_seen.id): 50},
@@ -63,11 +63,47 @@ class ArtworkRecommendationTests(APITestCase):
         ids = [item["id"] for item in results]
 
         self.assertLess(ids.index(self.watercolor_fresh.id), ids.index(self.watercolor_seen.id))
-        self.assertEqual(ids[-1], self.pixel.id)
+        self.assertNotIn(self.pixel.id, ids)
+
+    def test_dislike_filter_is_applied_before_pagination(self):
+        response = self.client.post(
+            "/api/artworks/recommendations/?page_size=2",
+            {
+                "dislikes": [f"artwork:{self.watercolor_seen.id}"],
+                "seed": "filtered-page",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data["data"]
+        self.assertEqual(len(data["results"]), 2)
+        self.assertNotIn(self.watercolor_seen.id, [item["id"] for item in data["results"]])
+
+    def test_positive_interaction_protects_repeatedly_exposed_item(self):
+        payload = {
+            "tags": [],
+            "impressions": {str(self.watercolor_seen.id): 50},
+            "likes": {str(self.watercolor_seen.id): 1},
+            "seed": "positive-after-exposure",
+        }
+        results = self.results(payload)
+        seen = next(item for item in results if item["id"] == self.watercolor_seen.id)
+
+        self.assertGreater(seen["recommendation_score"], 0)
 
     def test_same_seed_produces_stable_feed(self):
         payload = {"tags": [], "seed": "same-session", "mode": "guess"}
-        first = [item["id"] for item in self.results(payload)]
-        second = [item["id"] for item in self.results(payload)]
+        first = self.results(payload)
+        second = self.results(payload)
 
-        self.assertEqual(first, second)
+        self.assertEqual(
+            [(item["id"], item["recommendation_score"], item["is_exploration"]) for item in first],
+            [(item["id"], item["recommendation_score"], item["is_exploration"]) for item in second],
+        )
+
+    def test_guess_mode_keeps_personal_relevance_and_exploration_metadata(self):
+        results = self.results({"tags": ["水彩"], "seed": "guess-entry", "mode": "guess"})
+
+        self.assertIn(results[0]["id"], {self.watercolor_seen.id, self.watercolor_fresh.id})
+        self.assertTrue(all("is_exploration" in item for item in results))
